@@ -1565,10 +1565,19 @@ window.CLAWGPT_CONFIG = {
       console.log('Relay connection closed');
       this.relayWs = null;
       this.relayEncrypted = false;
+      this.relayIsGatewayProxy = false;
       // DON'T clear relay info or crypto - room persists on server
-      // Phone can reconnect on next app start using saved room ID
-      this.setStatus('Disconnected - reopen app to reconnect');
-      // Note: relayCrypto kept alive so we can reconnect with same identity
+      this.setStatus('Reconnecting...');
+      
+      // Auto-reconnect after a short delay (if app is visible)
+      if (document.visibilityState === 'visible' && this.relayInfo) {
+        console.log('Auto-reconnecting to relay in 2s...');
+        setTimeout(() => {
+          if (!this.relayWs && this.relayInfo) {
+            this.joinRelayAsClient(this.relayInfo);
+          }
+        }, 2000);
+      }
     };
   }
   
@@ -2509,16 +2518,45 @@ window.CLAWGPT_CONFIG = {
   // Check connection status and reconnect if needed
   checkAndReconnect() {
     console.log('App became visible, checking connections...');
+    console.log('Relay info:', !!this.relayInfo, 'RelayWs:', this.relayWs?.readyState, 'RelayEncrypted:', this.relayEncrypted, 'RelayIsProxy:', this.relayIsGatewayProxy);
     
-    // Check relay connection
-    if (this.relayInfo && (!this.relayWs || this.relayWs.readyState !== WebSocket.OPEN)) {
-      console.log('Relay disconnected, attempting reconnect...');
-      this.relayEncrypted = false;
-      this.joinRelayAsClient(this.relayInfo);
+    // If we have relay info saved, we should reconnect via relay
+    if (this.relayInfo) {
+      // Check if relay WebSocket is dead or not encrypted (needs fresh key exchange)
+      const wsState = this.relayWs?.readyState;
+      const needsReconnect = !this.relayWs || 
+                            wsState === WebSocket.CLOSED || 
+                            wsState === WebSocket.CLOSING ||
+                            !this.relayEncrypted;
+      
+      if (needsReconnect) {
+        console.log('Relay needs reconnect (state:', wsState, 'encrypted:', this.relayEncrypted, ')');
+        this.relayEncrypted = false;
+        this.relayIsGatewayProxy = false;
+        // Close stale WebSocket if it exists
+        if (this.relayWs && wsState !== WebSocket.CLOSED) {
+          try { this.relayWs.close(); } catch (e) {}
+        }
+        this.relayWs = null;
+        this.joinRelayAsClient(this.relayInfo);
+        return; // Don't also try direct gateway
+      }
+      
+      // WebSocket appears OPEN - but might be zombie. Check if encrypted.
+      if (!this.relayEncrypted) {
+        console.log('Relay WebSocket open but not encrypted, reconnecting...');
+        try { this.relayWs.close(); } catch (e) {}
+        this.relayWs = null;
+        this.joinRelayAsClient(this.relayInfo);
+        return;
+      }
+      
+      console.log('Relay connection appears healthy');
+      return; // Using relay, don't try direct gateway
     }
     
-    // Check direct gateway connection (if not using relay)
-    if (!this.relayIsGatewayProxy && this.gatewayUrl && (!this.ws || this.ws.readyState !== WebSocket.OPEN)) {
+    // No relay - check direct gateway connection
+    if (this.gatewayUrl && (!this.ws || this.ws.readyState !== WebSocket.OPEN)) {
       console.log('Gateway disconnected, attempting reconnect...');
       this.connect();
     }
