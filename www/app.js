@@ -1,6 +1,50 @@
 // ClawGPT - ChatGPT-like interface for OpenClaw
 // https://github.com/openclaw/openclaw
 
+// === Debug Log Capture ===
+// Captures console output for debugging relay connection issues
+window.clawgptLogs = [];
+window.clawgptLogLimit = 500; // Keep last 500 entries
+
+(function() {
+  const originalLog = console.log;
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  
+  function captureLog(level, args) {
+    const timestamp = new Date().toISOString().substr(11, 12); // HH:MM:SS.mmm
+    const message = Array.from(args).map(arg => {
+      if (typeof arg === 'object') {
+        try { return JSON.stringify(arg); }
+        catch { return String(arg); }
+      }
+      return String(arg);
+    }).join(' ');
+    
+    window.clawgptLogs.push(`[${timestamp}] [${level}] ${message}`);
+    
+    // Trim old entries
+    if (window.clawgptLogs.length > window.clawgptLogLimit) {
+      window.clawgptLogs = window.clawgptLogs.slice(-window.clawgptLogLimit);
+    }
+  }
+  
+  console.log = function(...args) {
+    captureLog('LOG', args);
+    originalLog.apply(console, args);
+  };
+  
+  console.error = function(...args) {
+    captureLog('ERR', args);
+    originalError.apply(console, args);
+  };
+  
+  console.warn = function(...args) {
+    captureLog('WRN', args);
+    originalWarn.apply(console, args);
+  };
+})();
+
 // IndexedDB wrapper for chat storage
 class ChatStorage {
   constructor() {
@@ -1073,6 +1117,71 @@ window.CLAWGPT_CONFIG = {
     this.showToast(`Exported ${exportData.chatCount} chats`);
   }
   
+  // Copy debug logs to clipboard
+  copyLogs() {
+    const logs = window.clawgptLogs || [];
+    if (logs.length === 0) {
+      this.showToast('No logs to copy');
+      return;
+    }
+    
+    const logText = [
+      `ClawGPT Mobile Logs - ${new Date().toISOString()}`,
+      `App Version: 0.1.0`,
+      `User Agent: ${navigator.userAgent}`,
+      `Relay Info: ${this.relayInfo ? JSON.stringify(this.relayInfo) : 'none'}`,
+      `Relay Encrypted: ${this.relayEncrypted}`,
+      `Gateway URL: ${this.gatewayUrl || 'not set'}`,
+      '---',
+      ...logs
+    ].join('\n');
+    
+    // Use Capacitor clipboard if available, otherwise fallback
+    if (window.Capacitor?.Plugins?.Clipboard) {
+      window.Capacitor.Plugins.Clipboard.write({ string: logText })
+        .then(() => this.showToast(`Copied ${logs.length} log entries`))
+        .catch(() => this.fallbackCopyLogs(logText, logs.length));
+    } else {
+      this.fallbackCopyLogs(logText, logs.length);
+    }
+  }
+  
+  fallbackCopyLogs(text, count) {
+    // Web fallback
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text)
+        .then(() => this.showToast(`Copied ${count} log entries`))
+        .catch(() => this.showToast('Failed to copy logs', true));
+    } else {
+      // Last resort - create textarea
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        this.showToast(`Copied ${count} log entries`);
+      } catch {
+        this.showToast('Failed to copy logs', true);
+      }
+      document.body.removeChild(textarea);
+    }
+  }
+  
+  clearLogs() {
+    window.clawgptLogs = [];
+    this.updateLogCount();
+    this.showToast('Logs cleared');
+  }
+  
+  updateLogCount() {
+    const countEl = document.getElementById('logCount');
+    if (countEl) {
+      const count = (window.clawgptLogs || []).length;
+      countEl.textContent = `Logs: ${count} entries`;
+    }
+  }
+  
   // Import chats from a JSON file
   importChats(file) {
     const reader = new FileReader();
@@ -2096,6 +2205,18 @@ window.CLAWGPT_CONFIG = {
       showQrBtn.addEventListener('click', () => this.showMobileQR());
     }
     
+    // Debug log buttons
+    const copyLogsBtn = document.getElementById('copyLogsBtn');
+    const clearLogsBtn = document.getElementById('clearLogsBtn');
+    if (copyLogsBtn) {
+      copyLogsBtn.addEventListener('click', () => this.copyLogs());
+    }
+    if (clearLogsBtn) {
+      clearLogsBtn.addEventListener('click', () => this.clearLogs());
+    }
+    // Update log count when settings open
+    this.updateLogCount();
+    
     // QR Scan button (mobile app - scan desktop's QR)
     const scanQrBtn = document.getElementById('scanQrBtn');
     if (scanQrBtn) {
@@ -2415,6 +2536,7 @@ window.CLAWGPT_CONFIG = {
     this.elements.settingsModal.classList.add('open');
     this.updateSettingsButtons();
     this.updateSettingsForConfigMode();
+    this.updateLogCount();
   }
   
   updateSettingsForConfigMode() {
