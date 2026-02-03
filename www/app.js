@@ -934,16 +934,20 @@ class ClawGPT {
           if (msg.event === 'channel.joined') {
             console.log('Joined relay channel:', msg);
             if (msg.hostConnected) {
+              // Connected via relay - use desktop's session directly
+              this.connected = true;
+              this.setStatus('Connected (via relay)', true);
               this.showToast('Connected to your computer!');
-              // Now authenticate with the gateway through the relay
-              this.sendConnectViaRelay();
+              this.onInputChange();
+              // Don't call loadHistory/fetchModels - we'll use local state
             } else {
               this.setStatus('Waiting for computer...');
               this.showToast('Waiting for your computer to connect...');
             }
           } else if (msg.event === 'host.connected') {
+            this.connected = true;
+            this.setStatus('Connected (via relay)', true);
             this.showToast('Computer connected!');
-            this.sendConnectViaRelay();
           } else if (msg.event === 'host.disconnected') {
             this.setStatus('Computer disconnected');
             this.showToast('Your computer disconnected');
