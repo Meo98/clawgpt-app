@@ -1506,7 +1506,8 @@ window.CLAWGPT_CONFIG = {
   // Connect to gateway through relay (phone side)
   connectViaRelay() {
     console.log('Connecting to gateway via relay proxy...');
-    this.setStatus('Connecting...');
+    // Don't overwrite status - we're already showing "Connected" from relay encryption
+    // The gateway auth happens transparently over the encrypted relay
     
     // The phone sends messages to relay, desktop forwards to gateway
     // We'll use the relay as our "WebSocket" to gateway
@@ -3141,19 +3142,28 @@ Example: [0, 2, 5]`;
 
       this.ws.onerror = (error) => {
         console.error('WebSocket error:', error);
-        this.setStatus('Error');
+        // Don't overwrite status if we're connected via relay
+        if (!this.relayEncrypted) {
+          this.setStatus('Error');
+        }
       };
 
       this.ws.onclose = () => {
         console.log('WebSocket closed');
         this.connected = false;
-        this.setStatus('Disconnected');
+        // Don't overwrite status if we're connected via relay
+        if (!this.relayEncrypted) {
+          this.setStatus('Disconnected');
+        }
         this.elements.sendBtn.disabled = true;
         this.updateSettingsButtons();
       };
     } catch (error) {
       console.error('Connection error:', error);
-      this.setStatus('Error');
+      // Don't overwrite status if we're connected via relay
+      if (!this.relayEncrypted) {
+        this.setStatus('Error');
+      }
     }
   }
 
