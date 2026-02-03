@@ -357,6 +357,29 @@ class ClawGPT {
     const openControlBtn = document.getElementById('openControlUiBtn');
     const getTokenBtn = document.getElementById('getTokenBtn');
     
+    // New: QR scan button
+    const scanQrBtn = document.getElementById('scanQrBtn');
+    if (scanQrBtn) {
+      scanQrBtn.addEventListener('click', () => this.startQrScan());
+    }
+    
+    // New: Advanced setup toggle
+    const advancedToggle = document.getElementById('advancedSetupToggle');
+    const advancedFields = document.getElementById('advancedSetupFields');
+    if (advancedToggle && advancedFields) {
+      advancedToggle.addEventListener('click', () => {
+        const isExpanded = advancedFields.style.display !== 'none';
+        advancedFields.style.display = isExpanded ? 'none' : 'block';
+        advancedToggle.classList.toggle('expanded', !isExpanded);
+      });
+    }
+    
+    // New: Setup save button (from advanced fields)
+    const setupSaveBtn = document.getElementById('setupSaveBtn');
+    if (setupSaveBtn) {
+      setupSaveBtn.addEventListener('click', () => this.handleSetupFromAdvanced());
+    }
+    
     if (saveBtn) {
       saveBtn.addEventListener('click', () => this.handleSetupSave());
     }
@@ -425,6 +448,137 @@ class ClawGPT {
     
     // Show helper toast
     this.showToast('Look for gateway → auth → token in the config');
+  }
+  
+  // QR Code Scanning for Mobile Setup
+  async startQrScan() {
+    // Check if we're in a Capacitor native app
+    if (typeof Capacitor !== 'undefined' && Capacitor.isNativePlatform()) {
+      await this.startNativeQrScan();
+    } else {
+      // Fallback for web - show instructions
+      this.showToast('QR scanning requires the mobile app. Use Advanced Setup instead.');
+      const advancedToggle = document.getElementById('advancedSetupToggle');
+      const advancedFields = document.getElementById('advancedSetupFields');
+      if (advancedToggle && advancedFields) {
+        advancedFields.style.display = 'block';
+        advancedToggle.classList.add('expanded');
+      }
+    }
+  }
+  
+  async startNativeQrScan() {
+    try {
+      // Get the barcode scanner from Capacitor plugins
+      const { BarcodeScanner } = Capacitor.Plugins;
+      
+      // Check/request camera permission
+      const { camera } = await BarcodeScanner.checkPermissions();
+      if (camera !== 'granted') {
+        const result = await BarcodeScanner.requestPermissions();
+        if (result.camera !== 'granted') {
+          this.showToast('Camera permission is required to scan QR codes');
+          return;
+        }
+      }
+      
+      // Start scanning
+      document.body.classList.add('scanner-active');
+      
+      const listener = await BarcodeScanner.addListener('barcodeScanned', async (result) => {
+        const barcode = result.barcode;
+        if (barcode && barcode.rawValue) {
+          await listener.remove();
+          await BarcodeScanner.stopScan();
+          document.body.classList.remove('scanner-active');
+          
+          this.handleQrCodeScanned(barcode.rawValue);
+        }
+      });
+      
+      await BarcodeScanner.startScan();
+      
+      // Add cancel button listener
+      const cancelScan = async () => {
+        await listener.remove();
+        await BarcodeScanner.stopScan();
+        document.body.classList.remove('scanner-active');
+      };
+      
+      // Store cancel function for later use
+      this.cancelQrScan = cancelScan;
+      
+    } catch (error) {
+      console.error('QR scan error:', error);
+      document.body.classList.remove('scanner-active');
+      this.showToast('Failed to start QR scanner: ' + error.message);
+    }
+  }
+  
+  handleQrCodeScanned(data) {
+    try {
+      // Try to parse as JSON first (new format)
+      let config;
+      try {
+        config = JSON.parse(data);
+      } catch {
+        // Try to parse as URL with query params (old format)
+        const url = new URL(data);
+        config = {
+          gatewayUrl: url.searchParams.get('gateway') || url.searchParams.get('url'),
+          authToken: url.searchParams.get('token') || url.searchParams.get('auth'),
+          sessionKey: url.searchParams.get('session') || 'main'
+        };
+      }
+      
+      if (config.gatewayUrl || config.gateway) {
+        const gatewayUrl = config.gatewayUrl || config.gateway;
+        const authToken = config.authToken || config.token || '';
+        const sessionKey = config.sessionKey || config.session || 'main';
+        
+        // Save settings
+        this.gatewayUrl = gatewayUrl;
+        this.authToken = authToken;
+        this.sessionKey = sessionKey;
+        this.saveSettings();
+        
+        // Close setup modal
+        const modal = document.getElementById('setupModal');
+        if (modal) modal.classList.remove('open');
+        
+        this.showToast('Connected! Scanning QR code...');
+        this.autoConnect();
+      } else {
+        this.showToast('Invalid QR code - missing gateway URL');
+      }
+    } catch (error) {
+      console.error('QR parse error:', error);
+      this.showToast('Could not parse QR code data');
+    }
+  }
+  
+  handleSetupFromAdvanced() {
+    const gatewayUrl = document.getElementById('setupGatewayUrl')?.value?.trim();
+    const authToken = document.getElementById('setupAuthToken')?.value?.trim();
+    const sessionKey = document.getElementById('setupSessionKey')?.value?.trim() || 'main';
+    
+    if (!gatewayUrl) {
+      this.showToast('Please enter a Gateway URL');
+      return;
+    }
+    
+    // Save settings
+    this.gatewayUrl = gatewayUrl;
+    this.authToken = authToken;
+    this.sessionKey = sessionKey;
+    this.saveSettings();
+    
+    // Close setup modal
+    const modal = document.getElementById('setupModal');
+    if (modal) modal.classList.remove('open');
+    
+    this.showToast('Connecting...');
+    this.autoConnect();
   }
   
   async checkGatewayConnection() {

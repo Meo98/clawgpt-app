@@ -9,10 +9,17 @@
     "sync": "npx cap sync android",
     "open:android": "npx cap open android"
   },
-  "keywords": ["openclaw", "clawgpt", "ai", "chatgpt", "android"],
+  "keywords": [
+    "openclaw",
+    "clawgpt",
+    "ai",
+    "chatgpt",
+    "android"
+  ],
   "author": "Curve Reality",
   "license": "MIT",
   "dependencies": {
+    "@capacitor-mlkit/barcode-scanning": "^8.0.0",
     "@capacitor/android": "^8.0.2",
     "@capacitor/cli": "^7.4.5",
     "@capacitor/core": "^8.0.2"

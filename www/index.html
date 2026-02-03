@@ -498,6 +498,62 @@
     </div>
   </div>
 
+  <!-- Setup Modal (first-time setup) -->
+  <div class="modal" id="setupModal">
+    <div class="modal-content setup-modal-content">
+      <div class="modal-header">
+        <h2>Welcome to ClawGPT</h2>
+      </div>
+      <div class="modal-body setup-body">
+        <p class="setup-intro">Connect to your OpenClaw instance to get started.</p>
+        
+        <!-- Primary: QR Scan -->
+        <div class="setup-primary" id="setupPrimary">
+          <button class="setup-scan-btn" id="scanQrBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="32" height="32">
+              <rect x="3" y="3" width="7" height="7"></rect>
+              <rect x="14" y="3" width="7" height="7"></rect>
+              <rect x="3" y="14" width="7" height="7"></rect>
+              <rect x="14" y="14" width="3" height="3"></rect>
+              <rect x="18" y="14" width="3" height="3"></rect>
+              <rect x="14" y="18" width="3" height="3"></rect>
+              <rect x="18" y="18" width="3" height="3"></rect>
+            </svg>
+            <span>Scan QR Code</span>
+          </button>
+          <p class="setup-hint">Open OpenClaw on your computer and scan the connection QR code</p>
+        </div>
+        
+        <!-- Secondary: Advanced Setup -->
+        <div class="setup-secondary">
+          <button class="setup-advanced-toggle" id="advancedSetupToggle">
+            Advanced Setup
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+        </div>
+        
+        <!-- Advanced fields (hidden by default) -->
+        <div class="setup-advanced-fields" id="advancedSetupFields" style="display: none;">
+          <div class="form-group">
+            <label for="setupGatewayUrl">Gateway URL</label>
+            <input type="text" id="setupGatewayUrl" placeholder="ws://192.168.1.100:18789">
+          </div>
+          <div class="form-group">
+            <label for="setupAuthToken">Auth Token</label>
+            <input type="password" id="setupAuthToken" placeholder="Your gateway token">
+          </div>
+          <div class="form-group">
+            <label for="setupSessionKey">Session Key</label>
+            <input type="text" id="setupSessionKey" placeholder="main" value="main">
+          </div>
+          <button class="save-btn" id="setupSaveBtn">Connect</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- QR Code generator for mobile access -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <!-- Prism.js core + autoloader for syntax highlighting -->
