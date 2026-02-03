@@ -1375,14 +1375,9 @@ window.CLAWGPT_CONFIG = {
                 type: 'keyexchange',
                 publicKey: this.relayCrypto.getPublicKey()
               }));
-              // Mark as encrypted (we pre-derived shared secret from host's pubkey in QR)
-              this.relayEncrypted = true;
-              const verifyCode = this.relayCrypto.getVerificationCode();
-              console.log('E2E encryption established! Verification:', verifyCode);
-              this.setStatus('Connected', true);
-              this.showToast(`Secure! Verify: ${verifyCode}`);
-              this.showRelayClientStatus(verifyCode);
-              this.sendChatSyncMeta();
+              // DON'T mark as encrypted yet - wait for keyexchange-response
+              // The saved host pubkey might be stale if desktop refreshed
+              this.setStatus('Securing...', false);
             } else {
               // Host not connected yet, wait for host.connected event
               this.setStatus('Waiting for desktop...', false);
