@@ -145,6 +145,252 @@ class ChatStorage {
   }
 }
 
+// ClawGPT Memory - Per-message storage for better search
+class MemoryStorage {
+  constructor() {
+    this.dbName = 'clawgpt-memory';
+    this.dbVersion = 1;
+    this.db = null;
+  }
+
+  async init() {
+    if (this.db) return this.db;
+    
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.dbName, this.dbVersion);
+      
+      request.onerror = () => {
+        console.warn('MemoryStorage: IndexedDB not available');
+        resolve(null);
+      };
+      
+      request.onsuccess = (event) => {
+        this.db = event.target.result;
+        resolve(this.db);
+      };
+      
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        
+        // Messages store with indexes for search
+        if (!db.objectStoreNames.contains('messages')) {
+          const store = db.createObjectStore('messages', { keyPath: 'id' });
+          store.createIndex('chatId', 'chatId', { unique: false });
+          store.createIndex('timestamp', 'timestamp', { unique: false });
+          store.createIndex('role', 'role', { unique: false });
+          // Compound index for chat + order
+          store.createIndex('chatOrder', ['chatId', 'order'], { unique: true });
+        }
+        
+        // Search index for full-text search
+        if (!db.objectStoreNames.contains('searchIndex')) {
+          const searchStore = db.createObjectStore('searchIndex', { keyPath: 'term' });
+          searchStore.createIndex('messageIds', 'messageIds', { unique: false, multiEntry: true });
+        }
+        
+        // Sync state
+        if (!db.objectStoreNames.contains('syncState')) {
+          db.createObjectStore('syncState', { keyPath: 'key' });
+        }
+      };
+    });
+  }
+
+  // Store a message and update search index
+  async storeMessage(chatId, chatTitle, message, order) {
+    await this.init();
+    if (!this.db) return;
+
+    const msgId = `${chatId}-${order}`;
+    const doc = {
+      id: msgId,
+      chatId,
+      chatTitle: chatTitle || 'Untitled',
+      order,
+      role: message.role,
+      content: message.content || '',
+      timestamp: message.timestamp || Date.now(),
+      tokens: message.tokens || 0
+    };
+
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(['messages', 'searchIndex'], 'readwrite');
+      const msgStore = tx.objectStore('messages');
+      const searchStore = tx.objectStore('searchIndex');
+      
+      // Store the message
+      msgStore.put(doc);
+      
+      // Update search index (simple term-based)
+      const terms = this.extractTerms(doc.content);
+      terms.forEach(term => {
+        const getReq = searchStore.get(term);
+        getReq.onsuccess = () => {
+          const existing = getReq.result || { term, messageIds: [] };
+          if (!existing.messageIds.includes(msgId)) {
+            existing.messageIds.push(msgId);
+            searchStore.put(existing);
+          }
+        };
+      });
+      
+      tx.oncomplete = () => resolve(doc);
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  // Extract searchable terms from content
+  extractTerms(content) {
+    if (!content) return [];
+    return content
+      .toLowerCase()
+      .replace(/[^\w\s]/g, ' ')
+      .split(/\s+/)
+      .filter(term => term.length >= 3)
+      .filter(term => !ClawGPT.STOP_WORDS.has(term));
+  }
+
+  // Search messages by terms
+  async search(query, limit = 50) {
+    await this.init();
+    if (!this.db) return [];
+
+    const terms = this.extractTerms(query);
+    if (terms.length === 0) return [];
+
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(['messages', 'searchIndex'], 'readonly');
+      const msgStore = tx.objectStore('messages');
+      const searchStore = tx.objectStore('searchIndex');
+      
+      // Find message IDs matching any term
+      const matchingIds = new Map(); // msgId -> match count
+      let termsProcessed = 0;
+      
+      terms.forEach(term => {
+        const req = searchStore.get(term);
+        req.onsuccess = () => {
+          if (req.result && req.result.messageIds) {
+            req.result.messageIds.forEach(id => {
+              matchingIds.set(id, (matchingIds.get(id) || 0) + 1);
+            });
+          }
+          termsProcessed++;
+          
+          if (termsProcessed === terms.length) {
+            // Sort by match count, get top results
+            const sortedIds = [...matchingIds.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, limit)
+              .map(([id]) => id);
+            
+            // Fetch the actual messages
+            const results = [];
+            let fetched = 0;
+            
+            if (sortedIds.length === 0) {
+              resolve([]);
+              return;
+            }
+            
+            sortedIds.forEach(id => {
+              const msgReq = msgStore.get(id);
+              msgReq.onsuccess = () => {
+                if (msgReq.result) {
+                  results.push({
+                    ...msgReq.result,
+                    matchScore: matchingIds.get(id)
+                  });
+                }
+                fetched++;
+                if (fetched === sortedIds.length) {
+                  // Sort by match score then timestamp
+                  results.sort((a, b) => {
+                    if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
+                    return b.timestamp - a.timestamp;
+                  });
+                  resolve(results);
+                }
+              };
+            });
+          }
+        };
+      });
+    });
+  }
+
+  // Get all messages for a chat
+  async getChatMessages(chatId) {
+    await this.init();
+    if (!this.db) return [];
+
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(['messages'], 'readonly');
+      const store = tx.objectStore('messages');
+      const index = store.index('chatId');
+      const req = index.getAll(chatId);
+      
+      req.onsuccess = () => {
+        const messages = req.result || [];
+        messages.sort((a, b) => a.order - b.order);
+        resolve(messages);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  // Get message count
+  async getMessageCount() {
+    await this.init();
+    if (!this.db) return 0;
+
+    return new Promise((resolve) => {
+      const tx = this.db.transaction(['messages'], 'readonly');
+      const store = tx.objectStore('messages');
+      const req = store.count();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(0);
+    });
+  }
+
+  // Sync all chats to memory storage
+  async syncFromChats(chats) {
+    if (!chats || typeof chats !== 'object') return 0;
+    
+    let synced = 0;
+    for (const [chatId, chat] of Object.entries(chats)) {
+      if (!chat.messages) continue;
+      
+      for (let i = 0; i < chat.messages.length; i++) {
+        await this.storeMessage(chatId, chat.title, chat.messages[i], i);
+        synced++;
+      }
+    }
+    
+    // Save sync timestamp
+    await this.init();
+    if (this.db) {
+      const tx = this.db.transaction(['syncState'], 'readwrite');
+      tx.objectStore('syncState').put({ key: 'lastSync', timestamp: Date.now() });
+    }
+    
+    return synced;
+  }
+
+  // Get last sync timestamp
+  async getLastSync() {
+    await this.init();
+    if (!this.db) return null;
+
+    return new Promise((resolve) => {
+      const tx = this.db.transaction(['syncState'], 'readonly');
+      const req = tx.objectStore('syncState').get('lastSync');
+      req.onsuccess = () => resolve(req.result?.timestamp || null);
+      req.onerror = () => resolve(null);
+    });
+  }
+}
+
 class ClawGPT {
   // Stop words for search filtering (class constant for performance)
   static STOP_WORDS = new Set([
@@ -176,6 +422,7 @@ class ClawGPT {
     this.streamBuffer = '';
     this.pinnedExpanded = false;
     this.storage = new ChatStorage();
+    this.memoryStorage = new MemoryStorage();
 
     this.loadSettings();
     this.initUI();
@@ -187,6 +434,9 @@ class ClawGPT {
   async init() {
     await this.loadChats();
     this.renderChatList();
+    
+    // Sync existing chats to clawgpt-memory (background)
+    this.syncMemoryStorage();
     
     // Check if we need to show setup wizard
     if (!this.hasConfigFile && !this.authToken) {
@@ -341,6 +591,35 @@ class ClawGPT {
     localStorage.setItem('clawgpt-settings', JSON.stringify(settings));
   }
   
+  // Sync existing chats to clawgpt-memory (for search)
+  async syncMemoryStorage() {
+    try {
+      const lastSync = await this.memoryStorage.getLastSync();
+      const now = Date.now();
+      
+      // Only sync if never synced or > 1 hour since last sync
+      if (lastSync && (now - lastSync) < 3600000) {
+        console.log('Memory storage: recently synced, skipping');
+        return;
+      }
+      
+      const count = await this.memoryStorage.syncFromChats(this.chats);
+      console.log(`Memory storage: synced ${count} messages`);
+    } catch (err) {
+      console.warn('Memory storage sync failed:', err);
+    }
+  }
+  
+  // Search across all messages in clawgpt-memory
+  async searchMemory(query) {
+    try {
+      return await this.memoryStorage.search(query);
+    } catch (err) {
+      console.warn('Memory search failed:', err);
+      return [];
+    }
+  }
+  
   // Setup Wizard
   showSetupWizard() {
     const modal = document.getElementById('setupModal');
@@ -356,29 +635,6 @@ class ClawGPT {
     const doneBtn = document.getElementById('setupDoneBtn');
     const openControlBtn = document.getElementById('openControlUiBtn');
     const getTokenBtn = document.getElementById('getTokenBtn');
-    
-    // New: QR scan button
-    const scanQrBtn = document.getElementById('scanQrBtn');
-    if (scanQrBtn) {
-      scanQrBtn.addEventListener('click', () => this.startQrScan());
-    }
-    
-    // New: Advanced setup toggle
-    const advancedToggle = document.getElementById('advancedSetupToggle');
-    const advancedFields = document.getElementById('advancedSetupFields');
-    if (advancedToggle && advancedFields) {
-      advancedToggle.addEventListener('click', () => {
-        const isExpanded = advancedFields.style.display !== 'none';
-        advancedFields.style.display = isExpanded ? 'none' : 'block';
-        advancedToggle.classList.toggle('expanded', !isExpanded);
-      });
-    }
-    
-    // New: Setup save button (from advanced fields)
-    const setupSaveBtn = document.getElementById('setupSaveBtn');
-    if (setupSaveBtn) {
-      setupSaveBtn.addEventListener('click', () => this.handleSetupFromAdvanced());
-    }
     
     if (saveBtn) {
       saveBtn.addEventListener('click', () => this.handleSetupSave());
@@ -448,137 +704,6 @@ class ClawGPT {
     
     // Show helper toast
     this.showToast('Look for gateway → auth → token in the config');
-  }
-  
-  // QR Code Scanning for Mobile Setup
-  async startQrScan() {
-    // Check if we're in a Capacitor native app
-    if (typeof Capacitor !== 'undefined' && Capacitor.isNativePlatform()) {
-      await this.startNativeQrScan();
-    } else {
-      // Fallback for web - show instructions
-      this.showToast('QR scanning requires the mobile app. Use Advanced Setup instead.');
-      const advancedToggle = document.getElementById('advancedSetupToggle');
-      const advancedFields = document.getElementById('advancedSetupFields');
-      if (advancedToggle && advancedFields) {
-        advancedFields.style.display = 'block';
-        advancedToggle.classList.add('expanded');
-      }
-    }
-  }
-  
-  async startNativeQrScan() {
-    try {
-      // Get the barcode scanner from Capacitor plugins
-      const { BarcodeScanner } = Capacitor.Plugins;
-      
-      // Check/request camera permission
-      const { camera } = await BarcodeScanner.checkPermissions();
-      if (camera !== 'granted') {
-        const result = await BarcodeScanner.requestPermissions();
-        if (result.camera !== 'granted') {
-          this.showToast('Camera permission is required to scan QR codes');
-          return;
-        }
-      }
-      
-      // Start scanning
-      document.body.classList.add('scanner-active');
-      
-      const listener = await BarcodeScanner.addListener('barcodeScanned', async (result) => {
-        const barcode = result.barcode;
-        if (barcode && barcode.rawValue) {
-          await listener.remove();
-          await BarcodeScanner.stopScan();
-          document.body.classList.remove('scanner-active');
-          
-          this.handleQrCodeScanned(barcode.rawValue);
-        }
-      });
-      
-      await BarcodeScanner.startScan();
-      
-      // Add cancel button listener
-      const cancelScan = async () => {
-        await listener.remove();
-        await BarcodeScanner.stopScan();
-        document.body.classList.remove('scanner-active');
-      };
-      
-      // Store cancel function for later use
-      this.cancelQrScan = cancelScan;
-      
-    } catch (error) {
-      console.error('QR scan error:', error);
-      document.body.classList.remove('scanner-active');
-      this.showToast('Failed to start QR scanner: ' + error.message);
-    }
-  }
-  
-  handleQrCodeScanned(data) {
-    try {
-      // Try to parse as JSON first (new format)
-      let config;
-      try {
-        config = JSON.parse(data);
-      } catch {
-        // Try to parse as URL with query params (old format)
-        const url = new URL(data);
-        config = {
-          gatewayUrl: url.searchParams.get('gateway') || url.searchParams.get('url'),
-          authToken: url.searchParams.get('token') || url.searchParams.get('auth'),
-          sessionKey: url.searchParams.get('session') || 'main'
-        };
-      }
-      
-      if (config.gatewayUrl || config.gateway) {
-        const gatewayUrl = config.gatewayUrl || config.gateway;
-        const authToken = config.authToken || config.token || '';
-        const sessionKey = config.sessionKey || config.session || 'main';
-        
-        // Save settings
-        this.gatewayUrl = gatewayUrl;
-        this.authToken = authToken;
-        this.sessionKey = sessionKey;
-        this.saveSettings();
-        
-        // Close setup modal
-        const modal = document.getElementById('setupModal');
-        if (modal) modal.classList.remove('open');
-        
-        this.showToast('Connected! Scanning QR code...');
-        this.autoConnect();
-      } else {
-        this.showToast('Invalid QR code - missing gateway URL');
-      }
-    } catch (error) {
-      console.error('QR parse error:', error);
-      this.showToast('Could not parse QR code data');
-    }
-  }
-  
-  handleSetupFromAdvanced() {
-    const gatewayUrl = document.getElementById('setupGatewayUrl')?.value?.trim();
-    const authToken = document.getElementById('setupAuthToken')?.value?.trim();
-    const sessionKey = document.getElementById('setupSessionKey')?.value?.trim() || 'main';
-    
-    if (!gatewayUrl) {
-      this.showToast('Please enter a Gateway URL');
-      return;
-    }
-    
-    // Save settings
-    this.gatewayUrl = gatewayUrl;
-    this.authToken = authToken;
-    this.sessionKey = sessionKey;
-    this.saveSettings();
-    
-    // Close setup modal
-    const modal = document.getElementById('setupModal');
-    if (modal) modal.classList.remove('open');
-    
-    this.showToast('Connecting...');
-    this.autoConnect();
   }
   
   async checkGatewayConnection() {
@@ -4100,6 +4225,16 @@ Example: [0, 2, 5]`;
     this.chats[this.currentChatId].messages.push(userMsg);
     this.chats[this.currentChatId].updatedAt = Date.now();
     this.saveChats();
+    
+    // Store in clawgpt-memory for search
+    const chat = this.chats[this.currentChatId];
+    this.memoryStorage.storeMessage(
+      this.currentChatId,
+      chat.title,
+      userMsg,
+      chat.messages.length - 1
+    ).catch(err => console.warn('Memory storage failed:', err));
+    
     this.renderChatList();
     this.renderMessages();
 
@@ -4231,6 +4366,16 @@ Example: [0, 2, 5]`;
     this.chats[this.currentChatId].messages.push(assistantMsg);
     this.chats[this.currentChatId].updatedAt = Date.now();
     this.saveChats();
+    
+    // Store in clawgpt-memory for search
+    const chat = this.chats[this.currentChatId];
+    this.memoryStorage.storeMessage(
+      this.currentChatId,
+      chat.title,
+      assistantMsg,
+      chat.messages.length - 1
+    ).catch(err => console.warn('Memory storage failed:', err));
+    
     this.renderMessages();
     
     // Check if we should generate/update summary
