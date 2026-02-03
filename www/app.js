@@ -2493,6 +2493,9 @@ window.CLAWGPT_CONFIG = {
       }
     });
     
+    // Swipe gesture to open/close sidebar on mobile
+    this.setupSwipeGestures();
+    
     // Also handle Capacitor app state changes (more reliable on mobile)
     if (window.Capacitor?.Plugins?.App) {
       window.Capacitor.Plugins.App.addListener('appStateChange', ({ isActive }) => {
@@ -2519,6 +2522,43 @@ window.CLAWGPT_CONFIG = {
       console.log('Gateway disconnected, attempting reconnect...');
       this.connect();
     }
+  }
+  
+  setupSwipeGestures() {
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchStartTime = 0;
+    
+    const messagesArea = this.elements.messages;
+    if (!messagesArea) return;
+    
+    messagesArea.addEventListener('touchstart', (e) => {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+      touchStartTime = Date.now();
+    }, { passive: true });
+    
+    messagesArea.addEventListener('touchend', (e) => {
+      const touchEndX = e.changedTouches[0].clientX;
+      const touchEndY = e.changedTouches[0].clientY;
+      const touchDuration = Date.now() - touchStartTime;
+      
+      const deltaX = touchEndX - touchStartX;
+      const deltaY = touchEndY - touchStartY;
+      
+      // Must be a quick horizontal swipe (not scrolling)
+      if (touchDuration < 300 && Math.abs(deltaX) > 80 && Math.abs(deltaY) < 50) {
+        if (deltaX > 0 && touchStartX < 50) {
+          // Swipe right from left edge - open sidebar
+          this.elements.sidebar.classList.add('open');
+          const overlay = document.getElementById('sidebarOverlay');
+          if (overlay) overlay.classList.add('active');
+        } else if (deltaX < 0 && this.elements.sidebar.classList.contains('open')) {
+          // Swipe left while sidebar is open - close it
+          this.closeSidebar();
+        }
+      }
+    }, { passive: true });
   }
 
   applyTheme() {
@@ -5063,20 +5103,31 @@ Example: [0, 2, 5]`;
   }
 
   // Text-to-Speech
-  initSpeechSynthesis() {
-    if (!('speechSynthesis' in window)) {
-      this.ttsSupported = false;
-      return;
-    }
-    
-    this.ttsSupported = true;
+  async initSpeechSynthesis() {
     this.currentSpeakBtn = null;
     this.voices = [];
+    this.ttsSupported = false;
     
-    // Load voices (may be async)
-    this.loadVoices();
-    if (speechSynthesis.onvoiceschanged !== undefined) {
-      speechSynthesis.onvoiceschanged = () => this.loadVoices();
+    // Try Capacitor native TTS first (works on Android)
+    if (window.Capacitor?.Plugins?.TextToSpeech) {
+      try {
+        this.nativeTTS = window.Capacitor.Plugins.TextToSpeech;
+        this.ttsSupported = true;
+        this.ttsMode = 'native';
+        console.log('TTS using native Capacitor plugin');
+        return;
+      } catch (e) {
+        console.log('Native TTS not available:', e);
+      }
+    }
+    
+    // Fallback to Web Speech API (works in browsers)
+    if ('speechSynthesis' in window) {
+      this.ttsMode = 'web';
+      this.loadVoices();
+      if (speechSynthesis.onvoiceschanged !== undefined) {
+        speechSynthesis.onvoiceschanged = () => this.loadVoices();
+      }
     }
   }
   
@@ -5084,19 +5135,15 @@ Example: [0, 2, 5]`;
     this.voices = speechSynthesis.getVoices();
     console.log('TTS voices loaded:', this.voices.length);
     
-    // Hide speak buttons if no voices available
     if (this.voices.length === 0) {
-      document.querySelectorAll('.speak-btn').forEach(btn => {
-        btn.style.display = 'none';
-      });
-      this.ttsSupported = false;
+      // Don't hide buttons yet - voices might load async
+      // On mobile, we'll use native TTS anyway
+      if (this.ttsMode !== 'native') {
+        this.ttsSupported = false;
+      }
       return;
     }
     
-    // Show speak buttons if voices become available
-    document.querySelectorAll('.speak-btn').forEach(btn => {
-      btn.style.display = '';
-    });
     this.ttsSupported = true;
     
     // Log available voices for debugging
@@ -5116,7 +5163,7 @@ Example: [0, 2, 5]`;
     }
   }
   
-  toggleSpeech(btn, text) {
+  async toggleSpeech(btn, text) {
     if (!this.ttsSupported) {
       this.showToast('Text-to-speech not supported', true);
       return;
@@ -5125,6 +5172,63 @@ Example: [0, 2, 5]`;
     const speakIcon = btn.dataset.speakIcon;
     const stopIcon = btn.dataset.stopIcon;
     
+    // Use native TTS on mobile (Capacitor)
+    if (this.ttsMode === 'native' && this.nativeTTS) {
+      // If already speaking, stop it
+      if (this.currentSpeakBtn === btn && this.isSpeaking) {
+        try {
+          await this.nativeTTS.stop();
+        } catch (e) {}
+        btn.innerHTML = speakIcon;
+        btn.classList.remove('speaking');
+        btn.title = 'Read aloud';
+        this.currentSpeakBtn = null;
+        this.isSpeaking = false;
+        return;
+      }
+      
+      // Stop any current speech
+      if (this.isSpeaking) {
+        try {
+          await this.nativeTTS.stop();
+        } catch (e) {}
+        if (this.currentSpeakBtn) {
+          this.currentSpeakBtn.innerHTML = this.currentSpeakBtn.dataset.speakIcon;
+          this.currentSpeakBtn.classList.remove('speaking');
+          this.currentSpeakBtn.title = 'Read aloud';
+        }
+      }
+      
+      // Start speaking with native TTS
+      btn.innerHTML = stopIcon;
+      btn.classList.add('speaking');
+      btn.title = 'Stop reading';
+      this.currentSpeakBtn = btn;
+      this.isSpeaking = true;
+      
+      try {
+        await this.nativeTTS.speak({
+          text: text,
+          lang: 'en-GB',
+          rate: 1.0,
+          pitch: 1.0,
+          volume: 1.0
+        });
+      } catch (e) {
+        console.error('Native TTS error:', e);
+        this.showToast('Speech failed: ' + (e.message || 'Unknown error'), true);
+      }
+      
+      // Speech finished
+      btn.innerHTML = speakIcon;
+      btn.classList.remove('speaking');
+      btn.title = 'Read aloud';
+      this.currentSpeakBtn = null;
+      this.isSpeaking = false;
+      return;
+    }
+    
+    // Fallback to Web Speech API
     // If already speaking this message, stop it
     if (this.currentSpeakBtn === btn && speechSynthesis.speaking) {
       speechSynthesis.cancel();

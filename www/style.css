@@ -193,6 +193,7 @@ body {
   gap: 2px;
   opacity: 0;
   transition: opacity 0.15s;
+  flex-shrink: 0;
 }
 
 .chat-item:hover .chat-actions {
@@ -2115,6 +2116,19 @@ body {
   /* Action buttons on messages - always visible on touch */
   .message-actions {
     opacity: 1;
+  }
+  
+  /* Chat action buttons - always visible on mobile (no hover) */
+  .chat-actions {
+    opacity: 1;
+  }
+  
+  .chat-item .delete-btn,
+  .chat-item .pin-btn,
+  .chat-item .rename-btn {
+    min-width: 32px;
+    min-height: 32px;
+    padding: 6px;
   }
 
   .msg-action-btn {
