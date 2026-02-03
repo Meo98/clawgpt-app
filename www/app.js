@@ -1413,6 +1413,25 @@ window.CLAWGPT_CONFIG = {
           return;
         }
         
+        // Handle keyexchange-response from host (in case host's key changed since QR was scanned)
+        if (msg.type === 'keyexchange-response' && msg.publicKey) {
+          console.log('Received host public key response');
+          // Update host's public key and re-derive shared secret
+          if (this.relayCrypto.setPeerPublicKey(msg.publicKey)) {
+            const verifyCode = this.relayCrypto.getVerificationCode();
+            console.log('Updated shared secret, verification:', verifyCode);
+            this.setStatus('Connected');
+            this.showToast(`Secure! Verify: ${verifyCode}`);
+            this.showRelayClientStatus(verifyCode);
+            // Update saved relay info with new pubkey
+            if (this.relayInfo) {
+              this.relayInfo.pubkey = msg.publicKey;
+              localStorage.setItem('clawgpt-relay', JSON.stringify(this.relayInfo));
+            }
+          }
+          return;
+        }
+        
         // Handle encrypted messages
         if (msg.type === 'encrypted' && this.relayEncrypted) {
           const decrypted = this.relayCrypto.openEnvelope(msg);
