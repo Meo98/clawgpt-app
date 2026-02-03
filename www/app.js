@@ -542,6 +542,11 @@ class ClawGPT {
       this.smartSearch = settings.smartSearch !== false;
       this.semanticSearch = settings.semanticSearch || false;
       this.showTokens = settings.showTokens !== false;
+      
+      // Relay settings
+      this.relayMode = settings.relayMode || false;
+      this.relayServer = settings.relayServer || '';
+      this.relayChannelId = settings.relayChannelId || '';
     } else {
       // No saved settings - use config.js values or defaults
       this.gatewayUrl = config.gatewayUrl || 'ws://127.0.0.1:18789';
@@ -551,6 +556,9 @@ class ClawGPT {
       this.smartSearch = true;
       this.semanticSearch = false;
       this.showTokens = true;
+      this.relayMode = false;
+      this.relayServer = '';
+      this.relayChannelId = '';
     }
     
     // Log if using config.js
@@ -799,25 +807,23 @@ class ClawGPT {
   
   handleQrCodeScanned(data) {
     console.log('QR scanned raw data:', data);
-    // Debug: show what was scanned
-    this.showToast('Scanned: ' + (data || '(empty)').substring(0, 80));
     
     try {
+      // Check if it's a relay URL (clawgpt://relay?...)
+      if (data.startsWith('clawgpt://relay')) {
+        this.handleRelayQR(data);
+        return;
+      }
+      
       // Try to parse as JSON first (new format)
       let config;
       try {
         config = JSON.parse(data);
         console.log('Parsed as JSON:', config);
       } catch {
-        // Try to parse as URL with query params
+        // Try to parse as URL with query params (local network format)
         console.log('Not JSON, trying URL parse...');
         const url = new URL(data);
-        console.log('URL parsed, searchParams:', {
-          gateway: url.searchParams.get('gateway'),
-          url: url.searchParams.get('url'),
-          token: url.searchParams.get('token'),
-          auth: url.searchParams.get('auth')
-        });
         config = {
           gatewayUrl: url.searchParams.get('gateway') || url.searchParams.get('url'),
           authToken: url.searchParams.get('token') || url.searchParams.get('auth'),
@@ -836,19 +842,21 @@ class ClawGPT {
         this.gatewayUrl = gatewayUrl;
         this.authToken = authToken;
         this.sessionKey = sessionKey;
+        this.relayMode = false;
         
-        // Force save connection settings (bypass hasConfigFile check for QR setup)
+        // Force save connection settings
         const settings = JSON.parse(localStorage.getItem('clawgpt-settings') || '{}');
         settings.gatewayUrl = gatewayUrl;
         settings.authToken = authToken;
         settings.sessionKey = sessionKey;
+        settings.relayMode = false;
         localStorage.setItem('clawgpt-settings', JSON.stringify(settings));
         
         // Close setup modal
         const modal = document.getElementById('setupModal');
         if (modal) modal.classList.remove('open');
         
-        this.showToast('Connecting to ' + gatewayUrl);
+        this.showToast('Connecting...');
         this.autoConnect();
       } else {
         this.showToast('Invalid QR code - missing gateway URL');
@@ -857,6 +865,121 @@ class ClawGPT {
       console.error('QR parse error:', error);
       this.showToast('Could not parse QR code data');
     }
+  }
+  
+  handleRelayQR(data) {
+    try {
+      // Parse relay URL: clawgpt://relay?server=...&channel=...&token=...
+      const url = new URL(data);
+      const relayServer = url.searchParams.get('server');
+      const channelId = url.searchParams.get('channel');
+      const authToken = url.searchParams.get('token') || '';
+      
+      if (!relayServer || !channelId) {
+        this.showToast('Invalid relay QR code');
+        return;
+      }
+      
+      console.log('Relay config:', { relayServer, channelId, authToken: '***' });
+      
+      // Save relay settings
+      this.relayServer = relayServer;
+      this.relayChannelId = channelId;
+      this.authToken = authToken;
+      this.sessionKey = 'main';
+      this.relayMode = true;
+      
+      // Save to localStorage
+      const settings = JSON.parse(localStorage.getItem('clawgpt-settings') || '{}');
+      settings.relayServer = relayServer;
+      settings.relayChannelId = channelId;
+      settings.authToken = authToken;
+      settings.relayMode = true;
+      localStorage.setItem('clawgpt-settings', JSON.stringify(settings));
+      
+      // Close setup modal
+      const modal = document.getElementById('setupModal');
+      if (modal) modal.classList.remove('open');
+      
+      this.showToast('Connecting via relay...');
+      this.connectToRelay();
+    } catch (error) {
+      console.error('Relay QR parse error:', error);
+      this.showToast('Could not parse relay QR code');
+    }
+  }
+  
+  connectToRelay() {
+    const wsUrl = this.relayServer.replace(/^http/, 'ws') + '/channel/' + this.relayChannelId;
+    console.log('Connecting to relay:', wsUrl);
+    
+    this.setStatus('Connecting to relay...');
+    
+    try {
+      if (this.ws) {
+        this.ws.close();
+      }
+      
+      this.ws = new WebSocket(wsUrl);
+      
+      this.ws.onopen = () => {
+        console.log('Relay WebSocket connected');
+      };
+      
+      this.ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        
+        // Handle relay-specific messages
+        if (msg.type === 'relay') {
+          if (msg.event === 'channel.joined') {
+            console.log('Joined relay channel:', msg);
+            if (msg.hostConnected) {
+              this.showToast('Connected to your computer!');
+              // Now authenticate with the gateway through the relay
+              this.sendConnectViaRelay();
+            } else {
+              this.setStatus('Waiting for computer...');
+              this.showToast('Waiting for your computer to connect...');
+            }
+          } else if (msg.event === 'host.connected') {
+            this.showToast('Computer connected!');
+            this.sendConnectViaRelay();
+          } else if (msg.event === 'host.disconnected') {
+            this.setStatus('Computer disconnected');
+            this.showToast('Your computer disconnected');
+          } else if (msg.event === 'error') {
+            this.showToast('Relay error: ' + msg.error);
+            this.setStatus('Error');
+          }
+          return;
+        }
+        
+        // Handle regular gateway messages
+        this.handleMessage(msg);
+      };
+      
+      this.ws.onerror = (error) => {
+        console.error('Relay WebSocket error:', error);
+        this.setStatus('Relay error');
+      };
+      
+      this.ws.onclose = () => {
+        console.log('Relay WebSocket closed');
+        this.connected = false;
+        this.setStatus('Disconnected');
+      };
+      
+    } catch (error) {
+      console.error('Relay connection error:', error);
+      this.setStatus('Error');
+      this.showToast('Failed to connect to relay');
+    }
+  }
+  
+  sendConnectViaRelay() {
+    // Send the same connect message as normal, but through the relay
+    const nonce = null; // Relay doesn't use challenge-response yet
+    this.sendConnect(nonce);
   }
   
   handleSetupFromAdvanced() {
@@ -2399,7 +2522,9 @@ Example: [0, 2, 5]`;
 
   // WebSocket connection
   autoConnect() {
-    if (this.gatewayUrl) {
+    if (this.relayMode && this.relayServer && this.relayChannelId) {
+      this.connectToRelay();
+    } else if (this.gatewayUrl) {
       this.connect();
     }
   }
