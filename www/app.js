@@ -798,20 +798,34 @@ class ClawGPT {
   }
   
   handleQrCodeScanned(data) {
+    console.log('QR scanned raw data:', data);
+    // Debug: show what was scanned
+    this.showToast('Scanned: ' + (data || '(empty)').substring(0, 80));
+    
     try {
       // Try to parse as JSON first (new format)
       let config;
       try {
         config = JSON.parse(data);
+        console.log('Parsed as JSON:', config);
       } catch {
-        // Try to parse as URL with query params (old format)
+        // Try to parse as URL with query params
+        console.log('Not JSON, trying URL parse...');
         const url = new URL(data);
+        console.log('URL parsed, searchParams:', {
+          gateway: url.searchParams.get('gateway'),
+          url: url.searchParams.get('url'),
+          token: url.searchParams.get('token'),
+          auth: url.searchParams.get('auth')
+        });
         config = {
           gatewayUrl: url.searchParams.get('gateway') || url.searchParams.get('url'),
           authToken: url.searchParams.get('token') || url.searchParams.get('auth'),
           sessionKey: url.searchParams.get('session') || 'main'
         };
       }
+      
+      console.log('Final config:', config);
       
       if (config.gatewayUrl || config.gateway) {
         const gatewayUrl = config.gatewayUrl || config.gateway;
