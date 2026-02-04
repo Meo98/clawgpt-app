@@ -2334,6 +2334,9 @@ window.CLAWGPT_CONFIG = {
             this.showToast(`Reconnected! Verify: ${verifyCode}`);
             this.showRelayClientStatus(verifyCode);
             
+            // Enable send button now that relay is connected
+            this.onInputChange();
+            
             // Sync chats
             this.sendChatSyncMeta();
           }
@@ -2462,6 +2465,9 @@ window.CLAWGPT_CONFIG = {
             setupModal.style.display = 'none';
           }
           
+          // Enable send button now that relay is connected
+          this.onInputChange();
+          
           // Start sync after encryption confirmed
           this.sendChatSyncMeta();
           return;
@@ -2497,6 +2503,9 @@ window.CLAWGPT_CONFIG = {
                 setupModal.classList.remove('open');
                 setupModal.style.display = 'none';
               }
+              
+              // Enable send button now that relay is connected
+              this.onInputChange();
               
               this.sendChatSyncMeta();
             }
@@ -3611,7 +3620,9 @@ window.CLAWGPT_CONFIG = {
     const hasText = this.elements.messageInput.value.trim().length > 0;
     const hasImages = this.pendingImages && this.pendingImages.length > 0;
     const hasTextFiles = this.pendingTextFiles && this.pendingTextFiles.length > 0;
-    this.elements.sendBtn.disabled = (!hasText && !hasImages && !hasTextFiles) || !this.connected;
+    // Allow sending if connected to gateway OR relay (thin client mode)
+    const canSend = this.connected || (this.relayEncrypted && this.relayWs);
+    this.elements.sendBtn.disabled = (!hasText && !hasImages && !hasTextFiles) || !canSend;
 
     // Auto-resize textarea
     this.elements.messageInput.style.height = 'auto';
