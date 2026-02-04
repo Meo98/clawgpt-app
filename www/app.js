@@ -2233,11 +2233,18 @@ window.CLAWGPT_CONFIG = {
       const verifyCode = this.relayCrypto.getVerificationCode();
       console.log('E2E encryption established! Verification:', verifyCode);
       
-      this.setStatus('Secure relay connected');
+      this.setStatus('Secure relay connected', true);
       this.showToast(`Secure connection! Verify: ${verifyCode}`, 5000);
       
       // Display verification in UI
       this.showRelayClientStatus(verifyCode);
+      
+      // Close the setup modal - we're connected!
+      const setupModal = document.getElementById('setupModal');
+      if (setupModal) {
+        setupModal.classList.remove('open');
+        setupModal.style.display = 'none';
+      }
       
       // Send our chat metadata to sync
       this.sendChatSyncMeta();
@@ -2335,9 +2342,12 @@ window.CLAWGPT_CONFIG = {
     // Handle auth info from desktop (gateway URL + token)
     if (msg.type === 'auth') {
       console.log('Received gateway auth from desktop');
+      // Store in memory only - don't persist to localStorage
+      // The phone can't reach the gateway directly, it must always use relay
+      // On next app open, it will show the QR scan screen again
       this.gatewayUrl = msg.gatewayUrl;
       this.authToken = msg.token;
-      this.saveSettings();
+      // DON'T call saveSettings() - we don't want to persist relay-received credentials
       
       // Now connect to gateway through the desktop (relay forwards our messages)
       this.connectViaRelay();
@@ -2887,6 +2897,66 @@ window.CLAWGPT_CONFIG = {
     const setupSaveBtn = document.getElementById('setupSaveBtn');
     if (setupSaveBtn) {
       setupSaveBtn.addEventListener('click', () => this.connectFromSetup());
+    }
+    
+    // Setup screen Copy Logs button
+    const setupCopyLogsBtn = document.getElementById('setupCopyLogsBtn');
+    if (setupCopyLogsBtn) {
+      setupCopyLogsBtn.addEventListener('click', () => {
+        const fullLog = [
+          '=== ClawGPT Debug Log ===',
+          'Time: ' + new Date().toISOString(),
+          'UserAgent: ' + navigator.userAgent,
+          'Platform: ' + (navigator.platform || 'unknown'),
+          'URL: ' + window.location.href,
+          '',
+          '=== Errors ===',
+          ...(window._clawgptErrors || ['(none)']),
+          '',
+          '=== Recent Logs ===',
+          ...(window._clawgptLogs || ['(none)']).slice(-100)
+        ].join('\n');
+        
+        navigator.clipboard.writeText(fullLog).then(() => {
+          setupCopyLogsBtn.textContent = 'Copied!';
+          setTimeout(() => setupCopyLogsBtn.textContent = 'Copy Logs', 2000);
+        }).catch(() => {
+          // Fallback
+          const ta = document.createElement('textarea');
+          ta.value = fullLog;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          setupCopyLogsBtn.textContent = 'Copied!';
+          setTimeout(() => setupCopyLogsBtn.textContent = 'Copy Logs', 2000);
+        });
+      });
+    }
+    
+    // Setup screen Reset button - clears saved connection settings
+    const setupResetBtn = document.getElementById('setupResetBtn');
+    if (setupResetBtn) {
+      setupResetBtn.addEventListener('click', () => {
+        if (confirm('Clear all saved connection settings? You will need to scan QR again.')) {
+          // Clear connection-related localStorage items
+          localStorage.removeItem('clawgpt-settings');
+          localStorage.removeItem('clawgpt-pairing-id');
+          
+          // Clear memory
+          this.gatewayUrl = 'ws://127.0.0.1:18789';
+          this.authToken = '';
+          
+          // Close any existing connections
+          if (this.ws) { this.ws.close(); this.ws = null; }
+          if (this.relayWs) { this.relayWs.close(); this.relayWs = null; }
+          
+          this.showToast('Settings cleared');
+          
+          // Reload to start fresh
+          setTimeout(() => window.location.reload(), 500);
+        }
+      });
     }
     
     this.elements.menuBtn.addEventListener('click', () => this.toggleSidebar());
