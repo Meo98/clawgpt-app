@@ -2379,36 +2379,8 @@ window.CLAWGPT_CONFIG = {
     }
     
     this.relayWs.onopen = () => {
-      console.log('Connected to relay channel as client');
-      
-      // Send our public key to complete key exchange
-      this.relayWs.send(JSON.stringify({
-        type: 'keyexchange',
-        publicKey: this.relayCrypto.getPublicKey()
-      }));
-      
-      // Mark as encrypted (we already derived shared secret from host's pubkey in QR)
-      this.relayEncrypted = true;
-      
-      // Show verification code
-      const verifyCode = this.relayCrypto.getVerificationCode();
-      console.log('E2E encryption established! Verification:', verifyCode);
-      
-      this.setStatus('Secure relay connected', true);
-      this.showToast(`Secure connection! Verify: ${verifyCode}`, 5000);
-      
-      // Display verification in UI
-      this.showRelayClientStatus(verifyCode);
-      
-      // Close the setup modal - we're connected!
-      const setupModal = document.getElementById('setupModal');
-      if (setupModal) {
-        setupModal.classList.remove('open');
-        setupModal.style.display = 'none';
-      }
-      
-      // Send our chat metadata to sync
-      this.sendChatSyncMeta();
+      console.log('Connected to relay WebSocket, waiting for room.joined...');
+      // Don't send keyexchange here - wait for room.joined event
     };
     
     this.relayWs.onmessage = (event) => {
@@ -2418,7 +2390,13 @@ window.CLAWGPT_CONFIG = {
         // Handle relay control messages
         if (msg.type === 'relay') {
           if (msg.event === 'channel.joined' || msg.event === 'room.joined') {
-            console.log('Joined relay:', msg);
+            console.log('Joined relay room, sending keyexchange...');
+            // NOW send keyexchange - room is ready
+            this.relayWs.send(JSON.stringify({
+              type: 'keyexchange',
+              publicKey: this.relayCrypto.getPublicKey()
+            }));
+            this.setStatus('Securing connection...');
           } else if (msg.event === 'host.disconnected') {
             this.showToast('Desktop disconnected', true);
             this.setStatus('Host disconnected');
@@ -2431,22 +2409,57 @@ window.CLAWGPT_CONFIG = {
           return;
         }
         
-        // Handle keyexchange from desktop (desktop may send this when we connect)
-        // On fresh QR scan we already have the pubkey, but handle it gracefully
+        // Handle keyexchange-response from desktop (confirms key exchange complete)
+        if (msg.type === 'keyexchange-response' && msg.publicKey) {
+          console.log('Received keyexchange-response from desktop');
+          // Desktop confirmed - NOW we're encrypted
+          this.relayEncrypted = true;
+          
+          const verifyCode = this.relayCrypto.getVerificationCode();
+          console.log('E2E encryption established! Verification:', verifyCode);
+          
+          this.setStatus('Connected', true);
+          this.showToast(`Secure! Verify: ${verifyCode}`, 5000);
+          this.showRelayClientStatus(verifyCode);
+          
+          // Close the setup modal
+          const setupModal = document.getElementById('setupModal');
+          if (setupModal) {
+            setupModal.classList.remove('open');
+            setupModal.style.display = 'none';
+          }
+          
+          // Start sync after encryption confirmed
+          this.sendChatSyncMeta();
+          return;
+        }
+        
+        // Handle keyexchange from desktop (desktop initiates on reconnect)
         if (msg.type === 'keyexchange' && msg.publicKey) {
-          console.log('Received keyexchange from desktop');
-          // If we don't have peer key yet (shouldn't happen on QR scan), set it
+          console.log('Received keyexchange from desktop (desktop-initiated)');
           if (!this.relayEncrypted && this.relayCrypto) {
+            // This happens when desktop initiates (e.g., on reconnect)
             if (this.relayCrypto.setPeerPublicKey(msg.publicKey)) {
+              // Respond with our key
               this.relayWs.send(JSON.stringify({
                 type: 'keyexchange',
                 publicKey: this.relayCrypto.getPublicKey()
               }));
               this.relayEncrypted = true;
               const verifyCode = this.relayCrypto.getVerificationCode();
-              this.setStatus('Secure relay connected', true);
+              console.log('E2E encryption established! Verification:', verifyCode);
+              
+              this.setStatus('Connected', true);
               this.showToast(`Secure! Verify: ${verifyCode}`, 5000);
               this.showRelayClientStatus(verifyCode);
+              
+              // Close setup modal
+              const setupModal = document.getElementById('setupModal');
+              if (setupModal) {
+                setupModal.classList.remove('open');
+                setupModal.style.display = 'none';
+              }
+              
               this.sendChatSyncMeta();
             }
           }
