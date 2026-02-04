@@ -2549,23 +2549,28 @@ window.CLAWGPT_CONFIG = {
     };
   }
   
-  // Handle messages received as relay client (phone side)
+  // Handle messages received as relay client (phone side - THIN CLIENT)
   handleRelayClientMessage(msg) {
-    // Handle sync messages (same as host)
-    if (msg.type === 'sync-meta') {
-      this.handleSyncMeta(msg);
+    // SIMPLIFIED PROTOCOL
+    
+    // Receive full state from desktop
+    if (msg.type === 'full-state') {
+      console.log('[Relay] Received full state from desktop');
+      this.handleFullState(msg.state);
       return;
     }
-    if (msg.type === 'sync-request') {
-      this.handleSyncRequest(msg);
-      return;
-    }
-    if (msg.type === 'sync-data') {
-      this.handleSyncData(msg);
-      return;
-    }
+    
+    // Receive chat update (new message)
     if (msg.type === 'chat-update') {
+      console.log('[Relay] Received chat update');
       this.handleChatUpdate(msg);
+      return;
+    }
+    
+    // Legacy sync messages - request full state instead
+    if (msg.type === 'sync-meta' || msg.type === 'sync-data') {
+      console.log('[Relay] Legacy sync, requesting full state');
+      this.requestFullState();
       return;
     }
     
@@ -2575,18 +2580,36 @@ window.CLAWGPT_CONFIG = {
       this.gatewayUrl = msg.gatewayUrl;
       this.authToken = msg.token;
       this.saveSettings();
-      
-      // Now connect to gateway through the desktop (relay forwards our messages)
-      this.connectViaRelay();
       return;
     }
     
     // Handle gateway responses forwarded from desktop
     if (msg.type === 'gateway-response') {
-      // Reuse the normal gateway message handler
       this.handleMessage(msg.data);
       return;
     }
+  }
+  
+  // THIN CLIENT: Request full state from desktop
+  requestFullState() {
+    if (!this.relayEncrypted) return;
+    this.sendRelayMessage({ type: 'request-state' });
+    console.log('[Relay] Requested full state from desktop');
+  }
+  
+  // THIN CLIENT: Handle full state from desktop
+  handleFullState(state) {
+    if (!state || !state.chats) return;
+    
+    // Replace local chats with desktop's state
+    this.chats = state.chats;
+    this.currentChatId = state.currentChatId;
+    
+    console.log(`[Relay] Loaded ${Object.keys(this.chats).length} chats from desktop`);
+    
+    // Update UI
+    this.renderChatList();
+    this.renderChat();
   }
   
   // Connect to gateway through relay (phone side)
@@ -2693,23 +2716,35 @@ window.CLAWGPT_CONFIG = {
   
   // === Chat History Sync ===
   
-  sendChatSyncMeta() {
-    // Send metadata about our chats so the other side can request what it needs
-    const meta = {};
+  // SIMPLIFIED: Send full state to phone (phone is thin client)
+  sendFullState() {
+    // Send all chats with messages - phone will just display them
+    const state = {
+      chats: {},
+      currentChatId: this.currentChatId
+    };
+    
     for (const [id, chat] of Object.entries(this.chats)) {
-      meta[id] = {
-        updatedAt: chat.updatedAt || chat.createdAt || 0,
-        messageCount: chat.messages?.length || 0
+      state.chats[id] = {
+        id: chat.id,
+        title: chat.title,
+        createdAt: chat.createdAt,
+        updatedAt: chat.updatedAt,
+        messages: chat.messages || []
       };
     }
     
     this.sendRelayMessage({
-      type: 'sync-meta',
-      chats: meta,
-      deviceId: this.getDeviceId()
+      type: 'full-state',
+      state: state
     });
     
-    console.log(`[Sync] Sent metadata for ${Object.keys(meta).length} chats`);
+    console.log(`[Relay] Sent full state: ${Object.keys(state.chats).length} chats`);
+  }
+  
+  // Legacy sync - keep for backwards compatibility but redirect to full state
+  sendChatSyncMeta() {
+    this.sendFullState();
   }
   
   getDeviceId() {
@@ -2825,6 +2860,56 @@ window.CLAWGPT_CONFIG = {
   }
   
   handleChatUpdate(msg) {
+    // NEW SIMPLIFIED FORMAT: single message update
+    if (msg.chatId && msg.message) {
+      const chatId = msg.chatId;
+      const newMsg = msg.message;
+      
+      // Create chat if it doesn't exist
+      if (!this.chats[chatId]) {
+        this.chats[chatId] = {
+          id: chatId,
+          title: newMsg.content?.substring(0, 30) || 'New Chat',
+          messages: [],
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        };
+      }
+      
+      // Add message if not duplicate
+      const chat = this.chats[chatId];
+      const isDuplicate = chat.messages.some(m => m.id === newMsg.id);
+      if (!isDuplicate) {
+        chat.messages.push(newMsg);
+        chat.updatedAt = Date.now();
+        
+        // Update title if this is first user message
+        if (newMsg.role === 'user' && chat.messages.length === 1) {
+          chat.title = newMsg.content.substring(0, 30) + (newMsg.content.length > 30 ? '...' : '');
+        }
+      }
+      
+      // Stop streaming indicator if assistant message received
+      if (newMsg.role === 'assistant') {
+        this.streaming = false;
+        this.updateStreamingUI();
+      }
+      
+      // Switch to this chat if we initiated it
+      if (!this.currentChatId || this.currentChatId === chatId) {
+        this.currentChatId = chatId;
+      }
+      
+      this.renderChatList();
+      if (this.currentChatId === chatId) {
+        this.renderMessages();
+      }
+      
+      console.log(`[Relay] Message update for chat: ${chat.title}`);
+      return;
+    }
+    
+    // LEGACY FORMAT: full chat object
     const chat = msg.chat;
     const theirDeviceId = msg.deviceId;
     
@@ -2839,13 +2924,6 @@ window.CLAWGPT_CONFIG = {
       this.chats[chat.id] = chat;
       this.saveChats();
       this.renderChatList();
-      
-      // Write to file memory
-      if (this.fileMemoryStorage.isEnabled()) {
-        this.fileMemoryStorage.writeChat(chat).catch(err => {
-          console.warn('Failed to write chat update to file:', err);
-        });
-      }
       
       if (this.currentChatId === chat.id) {
         this.renderMessages();
@@ -2870,17 +2948,31 @@ window.CLAWGPT_CONFIG = {
   }
   
   handleRelayMessage(msg) {
-    // Handle sync messages
-    if (msg.type === 'sync-meta') {
-      this.handleSyncMeta(msg);
+    // SIMPLIFIED PROTOCOL
+    
+    // Phone requests full state (on connect or reconnect)
+    if (msg.type === 'request-state') {
+      console.log('[Relay] Phone requested state');
+      this.sendFullState();
       return;
     }
-    if (msg.type === 'sync-request') {
-      this.handleSyncRequest(msg);
+    
+    // Phone sends a user message - forward to gateway
+    if (msg.type === 'user-message') {
+      console.log('[Relay] Received user message from phone');
+      // Create/update chat and forward to gateway
+      this.handlePhoneMessage(msg);
+      return;
+    }
+    
+    // Legacy sync messages - respond with full state instead
+    if (msg.type === 'sync-meta' || msg.type === 'sync-request') {
+      console.log('[Relay] Legacy sync request, sending full state');
+      this.sendFullState();
       return;
     }
     if (msg.type === 'sync-data') {
-      this.handleSyncData(msg);
+      // Ignore incoming sync-data in simplified mode
       return;
     }
     if (msg.type === 'chat-update') {
@@ -2901,6 +2993,48 @@ window.CLAWGPT_CONFIG = {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
     }
+  }
+  
+  // Handle message from phone - create chat if needed and forward to gateway
+  handlePhoneMessage(msg) {
+    const { chatId, content } = msg;
+    
+    // Create chat if it doesn't exist
+    if (!this.chats[chatId]) {
+      this.chats[chatId] = {
+        id: chatId,
+        title: content.substring(0, 30) + (content.length > 30 ? '...' : ''),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messages: []
+      };
+    }
+    
+    // Add user message
+    const userMsg = {
+      id: 'msg-' + Date.now(),
+      role: 'user',
+      content: content,
+      timestamp: Date.now()
+    };
+    this.chats[chatId].messages.push(userMsg);
+    this.chats[chatId].updatedAt = Date.now();
+    
+    // Broadcast update to phone
+    this.sendRelayMessage({
+      type: 'chat-update',
+      chatId: chatId,
+      message: userMsg
+    });
+    
+    // Switch to this chat and send to gateway
+    this.currentChatId = chatId;
+    this.saveChats();
+    this.renderChatList();
+    this.renderChat();
+    
+    // Send to gateway
+    this.sendMessage(content);
   }
   
   // Forward gateway response to phone via relay
@@ -6161,7 +6295,16 @@ Example: [0, 2, 5]`;
     const hasTextFiles = this.pendingTextFiles && this.pendingTextFiles.length > 0;
     
     // Need either text, images, or text files
-    if ((!text && !hasImages && !hasTextFiles) || !this.connected) return;
+    if (!text && !hasImages && !hasTextFiles) return;
+    
+    // THIN CLIENT MODE: If connected via relay, send to desktop and let it handle everything
+    if (this.relayEncrypted && this.relayWs) {
+      this.sendMessageViaRelay(text);
+      return;
+    }
+    
+    // Regular mode requires gateway connection
+    if (!this.connected) return;
 
     // Clear input
     this.elements.messageInput.value = '';
@@ -6306,6 +6449,39 @@ Example: [0, 2, 5]`;
     }
   }
 
+  // THIN CLIENT: Send message to desktop for processing
+  sendMessageViaRelay(text) {
+    // Clear input
+    this.elements.messageInput.value = '';
+    this.elements.messageInput.style.height = 'auto';
+    this.elements.sendBtn.disabled = true;
+    
+    // Generate chat ID if needed
+    if (!this.currentChatId) {
+      this.currentChatId = this.generateId();
+    }
+    
+    // Send to desktop - it will create the chat, forward to gateway, and broadcast updates
+    this.sendRelayMessage({
+      type: 'user-message',
+      chatId: this.currentChatId,
+      content: text
+    });
+    
+    console.log('[Relay] Sent message to desktop');
+    
+    // Show waiting indicator
+    this.streaming = true;
+    this.streamBuffer = '';
+    this.updateStreamingUI();
+    this.renderMessages();
+    
+    // Re-enable send button after a short delay
+    setTimeout(() => {
+      this.elements.sendBtn.disabled = false;
+    }, 500);
+  }
+
   stopGeneration() {
     if (!this.streaming) return;
     
@@ -6395,13 +6571,23 @@ Example: [0, 2, 5]`;
     if (!content || !content.trim()) return; // Skip empty messages
 
     const assistantMsg = {
+      id: 'msg-' + Date.now(),
       role: 'assistant',
       content: content,
       timestamp: Date.now()
     };
     this.chats[this.currentChatId].messages.push(assistantMsg);
     this.chats[this.currentChatId].updatedAt = Date.now();
-    this.saveChats(this.currentChatId);  // Broadcast to peer
+    this.saveChats(this.currentChatId);
+    
+    // Broadcast to phone via relay
+    if (this.relayEncrypted) {
+      this.sendRelayMessage({
+        type: 'chat-update',
+        chatId: this.currentChatId,
+        message: assistantMsg
+      });
+    }
     
     // Store in clawgpt-memory for search
     const chat = this.chats[this.currentChatId];
