@@ -2192,7 +2192,8 @@ window.CLAWGPT_CONFIG = {
           if (msg.type === 'encrypted' && this.relayEncrypted) {
             const decrypted = this.relayCrypto.openEnvelope(msg);
             if (decrypted) {
-              this.handleRelayMessage(decrypted);
+              // Phone is client - use client-side handler
+              this.handleRelayClientMessage(decrypted);
             } else {
               console.error('Failed to decrypt relay message');
             }
