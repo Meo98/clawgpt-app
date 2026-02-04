@@ -904,13 +904,16 @@ class ClawGPT {
     this.storage = new ChatStorage();
     this.memoryStorage = new MemoryStorage();
     // Use MobileMemoryStorage on Capacitor (auto-creates folder), FileMemoryStorage on desktop
+    // TEMPORARILY DISABLED: MobileMemoryStorage causes crash on some devices
+    // TODO: Re-enable once Capacitor Filesystem plugin issue is resolved
     try {
       this.isMobile = typeof Capacitor !== 'undefined' && typeof Capacitor.isNativePlatform === 'function' && Capacitor.isNativePlatform();
     } catch (e) {
       console.warn('Error checking Capacitor platform:', e);
       this.isMobile = false;
     }
-    this.fileMemoryStorage = this.isMobile ? new MobileMemoryStorage() : new FileMemoryStorage();
+    // Always use FileMemoryStorage for now - MobileMemoryStorage disabled due to crash
+    this.fileMemoryStorage = new FileMemoryStorage();
 
     this.loadSettings();
     this.initUI();
