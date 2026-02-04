@@ -2303,7 +2303,7 @@ window.CLAWGPT_CONFIG = {
             console.log('E2E encryption re-established! Verification:', verifyCode);
             
             this.setStatus('Secure relay connected', true);
-            this.showToast(`Reconnected! Verify: ${verifyCode}`, 5000);
+            this.showToast(`Reconnected! Verify: ${verifyCode}`);
             this.showRelayClientStatus(verifyCode);
             
             // Sync chats
@@ -2419,7 +2419,7 @@ window.CLAWGPT_CONFIG = {
           console.log('E2E encryption established! Verification:', verifyCode);
           
           this.setStatus('Connected', true);
-          this.showToast(`Secure! Verify: ${verifyCode}`, 5000);
+          this.showToast(`Secure! Verify: ${verifyCode}`);
           this.showRelayClientStatus(verifyCode);
           
           // Close the setup modal
@@ -2450,7 +2450,7 @@ window.CLAWGPT_CONFIG = {
               console.log('E2E encryption established! Verification:', verifyCode);
               
               this.setStatus('Connected', true);
-              this.showToast(`Secure! Verify: ${verifyCode}`, 5000);
+              this.showToast(`Secure! Verify: ${verifyCode}`);
               this.showRelayClientStatus(verifyCode);
               
               // Close setup modal
@@ -2643,7 +2643,7 @@ window.CLAWGPT_CONFIG = {
       urlDisplay.innerHTML = `<strong>Mode:</strong> Remote Relay (E2E Encrypted)<br><strong>Verify:</strong> <code style="font-size: 0.95em; background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px;">${verifyCode}</code><br><span style="color: var(--accent-color);">Match these words on your phone</span>`;
     }
     
-    this.showToast(`Secure! Verify: ${verifyCode}`, 5000);
+    this.showToast(`Secure! Verify: ${verifyCode}`);
     
     // Now send the auth token encrypted
     this.sendRelayMessage({
