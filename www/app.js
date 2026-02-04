@@ -1847,25 +1847,31 @@ window.CLAWGPT_CONFIG = {
         // Parse the QR code URL and extract relay params
         try {
           // Clean up the URL - remove any stray spaces that QR scanning might introduce
-          const cleanedContent = qrContent.trim().replace(/ /g, '');
+          const cleanedContent = qrContent.trim().replace(/\s+/g, '');
           console.log('Cleaned QR content:', cleanedContent);
           
-          const url = new URL(cleanedContent);
-          const relay = url.searchParams.get('relay');
-          const room = url.searchParams.get('room');
-          const pubkey = url.searchParams.get('pubkey');
+          // Extract params using regex (more robust than URL parsing for malformed URLs)
+          const relayMatch = cleanedContent.match(/[?&]relay=([^&]+)/);
+          const roomMatch = cleanedContent.match(/[?&]room=([^&]+)/);
+          const pubkeyMatch = cleanedContent.match(/[?&]pubkey=([^&]+)/);
+          const gatewayMatch = cleanedContent.match(/[?&]gateway=([^&]+)/);
           
-          console.log('Parsed params - relay:', relay, 'room:', room, 'pubkey:', pubkey ? pubkey.substring(0, 20) + '...' : 'no');
+          const relay = relayMatch ? decodeURIComponent(relayMatch[1]) : null;
+          const room = roomMatch ? decodeURIComponent(roomMatch[1]) : null;
+          const pubkey = pubkeyMatch ? decodeURIComponent(pubkeyMatch[1]) : null;
+          const gateway = gatewayMatch ? decodeURIComponent(gatewayMatch[1]) : null;
+          
+          console.log('Parsed params - relay:', relay, 'room:', room, 'pubkey:', pubkey ? pubkey.substring(0, 20) + '...' : 'no', 'gateway:', gateway);
           
           if (relay && room && pubkey) {
             // Join relay room with these params
             this.showToast('Connecting to desktop...');
             await this.joinRelayAsClient(relay, room, pubkey);
-          } else if (url.searchParams.get('gateway')) {
+          } else if (gateway) {
             // Local network mode - redirect to the URL
             window.location.href = cleanedContent;
           } else {
-            this.showToast('Invalid QR code - missing: ' + (!relay ? 'relay ' : '') + (!room ? 'room ' : '') + (!pubkey ? 'pubkey' : ''), true);
+            this.showToast('Missing params: ' + (!relay ? 'relay ' : '') + (!room ? 'room ' : '') + (!pubkey ? 'pubkey ' : '') + (!gateway ? 'gateway' : ''), true);
           }
         } catch (e) {
           console.error('Failed to parse QR code:', e);
@@ -1879,6 +1885,37 @@ window.CLAWGPT_CONFIG = {
       if (closeBtn) closeBtn.remove();
       this.showToast('Scan failed: ' + error.message, true);
     }
+  }
+  
+  // Connect from manual setup form (mobile)
+  connectFromSetup() {
+    const gatewayUrl = document.getElementById('setupGatewayUrl')?.value?.trim();
+    const authToken = document.getElementById('setupAuthToken')?.value?.trim();
+    const sessionKey = document.getElementById('setupSessionKey')?.value?.trim() || 'main';
+    
+    if (!gatewayUrl) {
+      this.showToast('Please enter a Gateway URL', true);
+      return;
+    }
+    
+    // Save settings
+    this.gatewayUrl = gatewayUrl;
+    this.authToken = authToken || '';
+    this.sessionKey = sessionKey;
+    this.saveSettings();
+    
+    // Update main settings UI if present
+    if (this.elements.gatewayUrl) this.elements.gatewayUrl.value = gatewayUrl;
+    if (this.elements.authToken) this.elements.authToken.value = authToken || '';
+    if (this.elements.sessionKeyInput) this.elements.sessionKeyInput.value = sessionKey;
+    
+    // Hide setup modal
+    const modal = document.getElementById('setupModal');
+    if (modal) modal.style.display = 'none';
+    
+    // Connect
+    this.showToast('Connecting...');
+    this.connect();
   }
   
   connectToRelayRoom(relayUrl, roomId) {
@@ -2650,6 +2687,23 @@ window.CLAWGPT_CONFIG = {
     const scanQrBtn = document.getElementById('scanQrBtn');
     if (scanQrBtn) {
       scanQrBtn.addEventListener('click', () => this.scanQRCode());
+    }
+    
+    // Manual setup toggle (mobile)
+    const advancedSetupToggle = document.getElementById('advancedSetupToggle');
+    const advancedSetupFields = document.getElementById('advancedSetupFields');
+    if (advancedSetupToggle && advancedSetupFields) {
+      advancedSetupToggle.addEventListener('click', () => {
+        const isHidden = advancedSetupFields.style.display === 'none';
+        advancedSetupFields.style.display = isHidden ? 'block' : 'none';
+        advancedSetupToggle.classList.toggle('expanded', isHidden);
+      });
+    }
+    
+    // Manual setup connect button
+    const setupSaveBtn = document.getElementById('setupSaveBtn');
+    if (setupSaveBtn) {
+      setupSaveBtn.addEventListener('click', () => this.connectFromSetup());
     }
     
     this.elements.menuBtn.addEventListener('click', () => this.toggleSidebar());
