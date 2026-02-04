@@ -5915,6 +5915,11 @@ Example: [0, 2, 5]`;
     console.log('Setting up speech recognition listeners...');
     this.lastPartialResult = '';  // Store last partial result as fallback
     this.mobileSpeech.addListener('partialResults', (data) => {
+      // Only update if we're still recording (ignore late arrivals after stop)
+      if (!this.isRecording) {
+        console.log('Ignoring late partial results');
+        return;
+      }
       console.log('Partial results:', data);
       if (data.matches && data.matches.length > 0) {
         this.lastPartialResult = data.matches[0];
