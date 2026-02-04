@@ -1020,15 +1020,36 @@ class ClawGPT {
       return; // Don't auto-connect to gateway - we'll get connection through relay
     }
     
-    // Check if we have a saved relay connection (phone reconnecting after app restart)
+    // Check if we have a saved relay connection
     const savedRelay = this.getSavedRelayConnection();
+    const savedPairingId = localStorage.getItem('clawgpt-pairing-id');
+    
     if (savedRelay) {
-      console.log('Found saved relay connection, reconnecting...');
-      const reconnected = await this.reconnectToRelay();
-      if (reconnected) {
-        return; // Don't show setup wizard - we're reconnecting via relay
+      // Check if we were the HOST (have pairing-id that matches saved room)
+      if (savedPairingId && savedRelay.roomId === savedPairingId) {
+        console.log('Reconnecting to relay as host...');
+        try {
+          // Initialize crypto for host
+          this.relayCrypto = new RelayCrypto();
+          this.relayCrypto.generateKeyPair();
+          
+          // Reconnect to the same room as host
+          await this.connectToRelayRoom(savedRelay.server, savedRelay.roomId);
+          console.log('Auto-reconnected to relay room as host');
+          return; // Don't show setup wizard
+        } catch (e) {
+          console.error('Failed to reconnect as host:', e);
+          // Fall through to setup wizard
+        }
+      } else {
+        // We were the CLIENT - use client reconnect logic
+        console.log('Found saved relay connection, reconnecting as client...');
+        const reconnected = await this.reconnectToRelay();
+        if (reconnected) {
+          return; // Don't show setup wizard - we're reconnecting via relay
+        }
+        // If reconnect failed, fall through to setup wizard
       }
-      // If reconnect failed, fall through to setup wizard
     }
     
     // Check if we need to show setup wizard
@@ -1848,6 +1869,9 @@ window.CLAWGPT_CONFIG = {
       // Connect to relay room (persistent - survives reconnection)
       const relayUrl = this.relayServerUrl || 'wss://clawgpt-relay.fly.dev';
       await this.connectToRelayRoom(relayUrl, pairingId);
+      
+      // Save for auto-reconnect on page refresh
+      this.saveRelayConnection(relayUrl, pairingId);
       
       // Build mobile URL with pairing ID + our public key
       // Phone will connect to same room and be able to reconnect later
