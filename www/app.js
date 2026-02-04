@@ -5914,16 +5914,20 @@ Example: [0, 2, 5]`;
     // Listen for partial results while recording
     console.log('Setting up speech recognition listeners...');
     this.lastPartialResult = '';  // Store last partial result as fallback
+    this.acceptingPartialResults = false;  // Flag to control when we accept results
     this.mobileSpeech.addListener('partialResults', (data) => {
-      // Only update if we're still recording (ignore late arrivals after stop)
-      if (!this.isRecording) {
-        console.log('Ignoring late partial results');
+      // Only update if we're accepting results (recording or in processing window)
+      if (!this.acceptingPartialResults) {
+        console.log('Ignoring partial results (not accepting)');
         return;
       }
       console.log('Partial results:', data);
       if (data.matches && data.matches.length > 0) {
         this.lastPartialResult = data.matches[0];
-        this.elements.messageInput.placeholder = data.matches[0] + '...';
+        // Only update placeholder if still in recording state (not processing)
+        if (this.isRecording) {
+          this.elements.messageInput.placeholder = data.matches[0] + '...';
+        }
       }
     });
     
@@ -5973,6 +5977,7 @@ Example: [0, 2, 5]`;
     
     try {
       this.isRecording = true;
+      this.acceptingPartialResults = true;  // Start accepting partial results
       this.speechStarted = false;  // Track if speech recognition actually started
       voiceBtn.classList.add('recording');
       this.elements.messageInput.placeholder = 'Listening...';
@@ -6003,11 +6008,13 @@ Example: [0, 2, 5]`;
   resetPushToTalkState(voiceBtn) {
     this.isRecording = false;
     this.speechStarted = false;
+    this.acceptingPartialResults = false;
     if (this.pttTimeout) {
       clearTimeout(this.pttTimeout);
       this.pttTimeout = null;
     }
     voiceBtn.classList.remove('recording');
+    voiceBtn.classList.remove('processing');
     this.elements.messageInput.placeholder = 'Message ClawGPT...';
   }
   
@@ -6029,14 +6036,27 @@ Example: [0, 2, 5]`;
       return;
     }
     
-    // Capture the transcript FIRST from partial results (stop() often hangs)
+    // Update button to show we're processing (but keep listening for a bit)
+    voiceBtn.classList.remove('recording');
+    voiceBtn.classList.add('processing');
+    this.elements.messageInput.placeholder = 'Processing...';
+    
+    // Wait 1 second to catch trailing words from speech recognition
+    console.log('Waiting 1s for trailing words...');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Stop accepting partial results
+    this.acceptingPartialResults = false;
+    
+    // NOW capture the transcript (after waiting for late partial results)
     const transcript = (this.lastPartialResult || '').trim();
     console.log('Captured transcript from partial results:', transcript);
     
     // Clear for next time
     this.lastPartialResult = '';
     
-    // Reset UI state immediately so button doesn't stay stuck
+    // Reset UI state
+    voiceBtn.classList.remove('processing');
     this.resetPushToTalkState(voiceBtn);
     
     // Try to stop speech recognition (with timeout since it often hangs)

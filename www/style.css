@@ -1122,6 +1122,16 @@ body {
   50% { opacity: 0.5; }
 }
 
+.voice-btn.processing {
+  color: #f59e0b;
+  animation: pulse-processing 0.5s ease-in-out infinite;
+}
+
+@keyframes pulse-processing {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 .voice-btn.unsupported {
   display: none;
 }
