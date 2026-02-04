@@ -1843,16 +1843,19 @@ window.CLAWGPT_CONFIG = {
       if (result.barcodes && result.barcodes.length > 0) {
         const qrContent = result.barcodes[0].rawValue;
         console.log('Scanned QR code:', qrContent);
-        alert('Scanned: ' + qrContent.substring(0, 100));
         
         // Parse the QR code URL and extract relay params
         try {
-          const url = new URL(qrContent);
+          // Clean up the URL - remove any stray spaces that QR scanning might introduce
+          const cleanedContent = qrContent.trim().replace(/ /g, '');
+          console.log('Cleaned QR content:', cleanedContent);
+          
+          const url = new URL(cleanedContent);
           const relay = url.searchParams.get('relay');
           const room = url.searchParams.get('room');
           const pubkey = url.searchParams.get('pubkey');
           
-          console.log('Parsed params - relay:', relay, 'room:', room, 'pubkey:', pubkey ? 'yes' : 'no');
+          console.log('Parsed params - relay:', relay, 'room:', room, 'pubkey:', pubkey ? pubkey.substring(0, 20) + '...' : 'no');
           
           if (relay && room && pubkey) {
             // Join relay room with these params
@@ -1860,7 +1863,7 @@ window.CLAWGPT_CONFIG = {
             await this.joinRelayAsClient(relay, room, pubkey);
           } else if (url.searchParams.get('gateway')) {
             // Local network mode - redirect to the URL
-            window.location.href = qrContent;
+            window.location.href = cleanedContent;
           } else {
             this.showToast('Invalid QR code - missing: ' + (!relay ? 'relay ' : '') + (!room ? 'room ' : '') + (!pubkey ? 'pubkey' : ''), true);
           }
