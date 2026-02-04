@@ -6441,15 +6441,57 @@ Example: [0, 2, 5]`;
     }
     
     try {
+      // Try to get available voices and find Google UK Female
+      let voiceToUse = null;
+      try {
+        const voices = await this.tts.getSupportedVoices();
+        console.log('Available TTS voices:', voices.voices?.length);
+        
+        // Look for Google UK Female voice
+        if (voices.voices) {
+          voiceToUse = voices.voices.find(v => 
+            v.name?.toLowerCase().includes('google') && 
+            v.name?.toLowerCase().includes('uk') && 
+            v.name?.toLowerCase().includes('female')
+          );
+          
+          // Fallback: any UK English Google voice
+          if (!voiceToUse) {
+            voiceToUse = voices.voices.find(v => 
+              v.lang?.startsWith('en-GB') && 
+              v.name?.toLowerCase().includes('google')
+            );
+          }
+          
+          // Fallback: any UK English voice
+          if (!voiceToUse) {
+            voiceToUse = voices.voices.find(v => v.lang?.startsWith('en-GB'));
+          }
+          
+          if (voiceToUse) {
+            console.log('Selected voice:', voiceToUse.name, voiceToUse.lang);
+          }
+        }
+      } catch (e) {
+        console.log('Could not get voices:', e.message);
+      }
+      
       console.log('Voice chat: speaking response');
-      await this.tts.speak({
+      const speakOptions = {
         text: text,
-        lang: 'en-US',
+        lang: 'en-GB',
         rate: 1.0,
         pitch: 1.0,
         volume: 1.0,
         category: 'playback'
-      });
+      };
+      
+      // Add voice if we found a preferred one
+      if (voiceToUse) {
+        speakOptions.voice = voiceToUse.voiceURI || voiceToUse.name;
+      }
+      
+      await this.tts.speak(speakOptions);
       
       console.log('Voice chat: finished speaking');
       
