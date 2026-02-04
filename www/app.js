@@ -1,6 +1,16 @@
 // ClawGPT - ChatGPT-like interface for OpenClaw
 // https://github.com/openclaw/openclaw
 
+// Global error handler to prevent app crashes
+window.onerror = function(message, source, lineno, colno, error) {
+  console.error('ClawGPT Error:', message, 'at', source, lineno, colno, error);
+  return false; // Don't prevent default error handling
+};
+
+window.addEventListener('unhandledrejection', function(event) {
+  console.error('ClawGPT Unhandled Promise Rejection:', event.reason);
+});
+
 // IndexedDB wrapper for chat storage
 class ChatStorage {
   constructor() {
@@ -413,16 +423,38 @@ class MobileMemoryStorage {
   }
 
   async init() {
-    // Check if Capacitor Filesystem is available
-    if (typeof Capacitor === 'undefined' || !Capacitor.Plugins?.Filesystem) {
-      console.log('MobileMemoryStorage: Capacitor Filesystem not available');
-      return false;
-    }
-
+    // TEMPORARILY DISABLED - debugging crash on startup
+    // TODO: Re-enable once Filesystem plugin is properly configured
+    console.log('MobileMemoryStorage: Temporarily disabled for debugging');
+    return false;
+    
+    /* Original code:
     try {
-      const { Filesystem, Directory } = Capacitor.Plugins;
+      // Check if Capacitor is available
+      if (typeof Capacitor === 'undefined') {
+        console.log('MobileMemoryStorage: Capacitor not available');
+        return false;
+      }
+
+      // Try to get Filesystem plugin - Capacitor 4+ uses Capacitor.Plugins
+      // but we need to be defensive about how we access it
+      let Filesystem = null;
+      
+      // Try Capacitor.Plugins first (Capacitor 4+)
+      if (Capacitor.Plugins?.Filesystem) {
+        Filesystem = Capacitor.Plugins.Filesystem;
+      }
+      // Try window.CapacitorCustomPlatform (some setups)
+      else if (window.CapacitorFilesystem) {
+        Filesystem = window.CapacitorFilesystem;
+      }
+      
+      if (!Filesystem) {
+        console.log('MobileMemoryStorage: Filesystem plugin not available');
+        return false;
+      }
+
       this.Filesystem = Filesystem;
-      this.Directory = Directory || { Documents: 'DOCUMENTS' };
       
       // Create clawgpt-memory folder if it doesn't exist
       await this.ensureFolder();
@@ -434,6 +466,7 @@ class MobileMemoryStorage {
       console.warn('MobileMemoryStorage: Init failed:', e);
       return false;
     }
+    */
   }
 
   async ensureFolder() {
@@ -859,7 +892,12 @@ class ClawGPT {
     this.storage = new ChatStorage();
     this.memoryStorage = new MemoryStorage();
     // Use MobileMemoryStorage on Capacitor (auto-creates folder), FileMemoryStorage on desktop
-    this.isMobile = typeof Capacitor !== 'undefined' && Capacitor.isNativePlatform?.();
+    try {
+      this.isMobile = typeof Capacitor !== 'undefined' && typeof Capacitor.isNativePlatform === 'function' && Capacitor.isNativePlatform();
+    } catch (e) {
+      console.warn('Error checking Capacitor platform:', e);
+      this.isMobile = false;
+    }
     this.fileMemoryStorage = this.isMobile ? new MobileMemoryStorage() : new FileMemoryStorage();
 
     this.loadSettings();
