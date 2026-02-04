@@ -6382,7 +6382,12 @@ Example: [0, 2, 5]`;
   }
   
   async sendVoiceChatMessage() {
-    if (!this.voiceChatActive) return;
+    console.log('sendVoiceChatMessage called, voiceChatActive:', this.voiceChatActive, 'transcript:', this.voiceChatTranscript?.substring(0, 50));
+    
+    if (!this.voiceChatActive) {
+      console.log('Voice chat: not active, aborting send');
+      return;
+    }
     
     const message = (this.voiceChatTranscript || '').trim();
     if (!message) {
