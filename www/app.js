@@ -6864,8 +6864,9 @@ Example: [0, 2, 5]`;
 
   // THIN CLIENT: Send message to desktop for processing
   sendMessageViaRelay(text) {
-    // Clear input
+    // Clear input and reset placeholder (in case voice input left something)
     this.elements.messageInput.value = '';
+    this.elements.messageInput.placeholder = 'Message ClawGPT...';
     this.elements.messageInput.style.height = 'auto';
     this.elements.sendBtn.disabled = true;
     
