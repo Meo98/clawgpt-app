@@ -2997,6 +2997,8 @@ window.CLAWGPT_CONFIG = {
   }
   
   handleChatUpdate(msg) {
+    console.log('handleChatUpdate:', JSON.stringify(msg).substring(0, 200));
+    
     // Handle streaming updates from desktop
     if (msg.streaming && msg.chatId) {
       this.streamBuffer = msg.content || '';
@@ -3004,6 +3006,12 @@ window.CLAWGPT_CONFIG = {
       this.currentChatId = msg.chatId;
       this.updateStreamingUI();
       this.renderMessages();
+      
+      // If voice chat is waiting and streaming just ended (content is complete)
+      if (this.voiceChatActive && this.voiceChatPendingResponse && msg.done) {
+        console.log('Streaming done, triggering voice chat response');
+        this.handleVoiceChatResponse(msg.content);
+      }
       return;
     }
     
@@ -3042,7 +3050,9 @@ window.CLAWGPT_CONFIG = {
         this.updateStreamingUI();
         
         // If voice chat mode is active, speak the response
+        console.log('Assistant message received, voiceChatActive:', this.voiceChatActive, 'pendingResponse:', this.voiceChatPendingResponse);
         if (this.voiceChatActive && this.voiceChatPendingResponse) {
+          console.log('Triggering voice chat response with content length:', newMsg.content?.length);
           this.handleVoiceChatResponse(newMsg.content);
         }
       }
@@ -6300,7 +6310,14 @@ Example: [0, 2, 5]`;
     
     this.voiceChatState = 'LISTENING';
     this.voiceChatTranscript = '';
+    this.voiceChatHasSpoken = false;  // Track if user has started speaking
     this.updateVoiceChatUI('LISTENING');
+    
+    // Clear any existing silence timer
+    if (this.silenceTimeout) {
+      clearTimeout(this.silenceTimeout);
+      this.silenceTimeout = null;
+    }
     
     try {
       // Start speech recognition
@@ -6312,8 +6329,8 @@ Example: [0, 2, 5]`;
       
       console.log('Voice chat: listening started');
       
-      // Set up silence detection - reset on each partial result
-      this.resetSilenceTimer();
+      // DON'T start silence timer here - wait until user starts speaking
+      // The timer will be started in handleVoiceChatPartialResult
       
     } catch (e) {
       console.error('Voice chat: failed to start listening', e);
@@ -6341,19 +6358,31 @@ Example: [0, 2, 5]`;
     if (!this.voiceChatActive || this.voiceChatState !== 'LISTENING') return;
     
     if (matches && matches.length > 0 && matches[0]) {
-      this.voiceChatTranscript = matches[0];
+      const transcript = matches[0].trim();
+      
+      // Ignore empty results
+      if (!transcript) return;
+      
+      // Mark that user has started speaking
+      if (!this.voiceChatHasSpoken) {
+        this.voiceChatHasSpoken = true;
+        console.log('Voice chat: user started speaking');
+      }
+      
+      this.voiceChatTranscript = transcript;
       this.updateVoiceChatUI('LISTENING', this.voiceChatTranscript);
       
-      // Reset silence timer on each result
+      // Reset silence timer on each result (only once user has started speaking)
       this.resetSilenceTimer();
     }
   }
   
   async sendVoiceChatMessage() {
-    if (!this.voiceChatActive || !this.voiceChatTranscript) return;
+    if (!this.voiceChatActive) return;
     
-    const message = this.voiceChatTranscript.trim();
+    const message = (this.voiceChatTranscript || '').trim();
     if (!message) {
+      console.log('Voice chat: no message to send, resuming listening');
       // No message, just resume listening
       this.startVoiceChatListening();
       return;
@@ -7311,9 +7340,26 @@ Example: [0, 2, 5]`;
   }
 
   updateStreamingUI() {
+    const wasStreaming = this._wasStreaming;
+    this._wasStreaming = this.streaming;
+    
     this.elements.sendBtn.style.display = this.streaming ? 'none' : 'flex';
     this.elements.stopBtn.style.display = this.streaming ? 'flex' : 'none';
     this.onInputChange();
+    
+    // If streaming just ended and voice chat is waiting for a response
+    if (wasStreaming && !this.streaming && this.voiceChatActive && this.voiceChatPendingResponse) {
+      console.log('Streaming ended, checking for response to speak');
+      // Get the last assistant message from current chat
+      const chat = this.chats[this.currentChatId];
+      if (chat && chat.messages && chat.messages.length > 0) {
+        const lastMsg = chat.messages[chat.messages.length - 1];
+        if (lastMsg.role === 'assistant' && lastMsg.content) {
+          console.log('Found assistant message, triggering voice response');
+          this.handleVoiceChatResponse(lastMsg.content);
+        }
+      }
+    }
   }
 
   handleChatEvent(payload) {
