@@ -400,6 +400,186 @@ class FileMemoryStorage {
   }
 }
 
+// Mobile Memory Storage - Uses Capacitor Filesystem for automatic storage (no user prompt)
+// This is used on mobile instead of FileMemoryStorage
+class MobileMemoryStorage {
+  constructor() {
+    this.enabled = false;
+    this.Filesystem = null;
+    this.Directory = null;
+    this.folderName = 'clawgpt-memory';
+    this.pendingWrites = [];
+    this.writeDebounce = null;
+  }
+
+  async init() {
+    // Check if Capacitor Filesystem is available
+    if (typeof Capacitor === 'undefined' || !Capacitor.Plugins?.Filesystem) {
+      console.log('MobileMemoryStorage: Capacitor Filesystem not available');
+      return false;
+    }
+
+    try {
+      const { Filesystem, Directory } = Capacitor.Plugins;
+      this.Filesystem = Filesystem;
+      this.Directory = Directory || { Documents: 'DOCUMENTS' };
+      
+      // Create clawgpt-memory folder if it doesn't exist
+      await this.ensureFolder();
+      
+      this.enabled = true;
+      console.log('MobileMemoryStorage: Ready (auto-created clawgpt-memory folder)');
+      return true;
+    } catch (e) {
+      console.warn('MobileMemoryStorage: Init failed:', e);
+      return false;
+    }
+  }
+
+  async ensureFolder() {
+    try {
+      await this.Filesystem.mkdir({
+        path: this.folderName,
+        directory: 'DOCUMENTS',
+        recursive: true
+      });
+    } catch (e) {
+      // Folder might already exist, that's fine
+      if (!e.message?.includes('exist')) {
+        console.warn('MobileMemoryStorage: mkdir warning:', e);
+      }
+    }
+  }
+
+  async writeMessage(message) {
+    if (!this.enabled) return;
+
+    this.pendingWrites.push(message);
+    
+    // Debounce writes
+    if (this.writeDebounce) clearTimeout(this.writeDebounce);
+    this.writeDebounce = setTimeout(() => this.flushWrites(), 1000);
+  }
+
+  async flushWrites() {
+    if (!this.enabled || this.pendingWrites.length === 0) return;
+
+    const toWrite = [...this.pendingWrites];
+    this.pendingWrites = [];
+
+    try {
+      // Group messages by date
+      const byDate = {};
+      for (const msg of toWrite) {
+        const date = new Date(msg.timestamp).toISOString().split('T')[0];
+        if (!byDate[date]) byDate[date] = [];
+        byDate[date].push(msg);
+      }
+
+      // Write to date-based files
+      for (const [date, messages] of Object.entries(byDate)) {
+        await this.appendToDateFile(date, messages);
+      }
+    } catch (e) {
+      console.error('MobileMemoryStorage: Error writing messages:', e);
+      // Put messages back in queue
+      this.pendingWrites = [...toWrite, ...this.pendingWrites];
+    }
+  }
+
+  async appendToDateFile(date, messages) {
+    const filename = `${this.folderName}/${date}.jsonl`;
+    
+    try {
+      // Try to read existing content
+      let existingContent = '';
+      let existingIds = new Set();
+      
+      try {
+        const result = await this.Filesystem.readFile({
+          path: filename,
+          directory: 'DOCUMENTS',
+          encoding: 'utf8'
+        });
+        existingContent = result.data || '';
+        
+        // Parse existing IDs to avoid duplicates
+        for (const line of existingContent.split('\n')) {
+          if (line.trim()) {
+            try {
+              const msg = JSON.parse(line);
+              if (msg.id) existingIds.add(msg.id);
+            } catch {}
+          }
+        }
+      } catch (e) {
+        // File doesn't exist yet, that's fine
+      }
+      
+      // Filter out duplicates and create new lines
+      const newMessages = messages.filter(m => !existingIds.has(m.id));
+      if (newMessages.length === 0) return;
+      
+      const newLines = newMessages.map(m => JSON.stringify(m)).join('\n') + '\n';
+      const fullContent = existingContent + newLines;
+      
+      // Write back
+      await this.Filesystem.writeFile({
+        path: filename,
+        directory: 'DOCUMENTS',
+        data: fullContent,
+        encoding: 'utf8'
+      });
+      
+      console.log(`MobileMemoryStorage: Wrote ${newMessages.length} messages to ${date}.jsonl`);
+    } catch (e) {
+      console.error(`MobileMemoryStorage: Error writing to ${filename}:`, e);
+      throw e;
+    }
+  }
+
+  async writeChat(chat) {
+    if (!this.enabled || !chat.messages) return;
+
+    for (let i = 0; i < chat.messages.length; i++) {
+      const msg = chat.messages[i];
+      await this.writeMessage({
+        id: `${chat.id}-${i}`,
+        chatId: chat.id,
+        chatTitle: chat.title || 'Untitled',
+        order: i,
+        role: msg.role,
+        content: msg.content || '',
+        timestamp: msg.timestamp || chat.createdAt || Date.now()
+      });
+    }
+  }
+
+  async syncAllChats(chats) {
+    if (!this.enabled) return 0;
+
+    let count = 0;
+    for (const chat of Object.values(chats)) {
+      if (chat.messages) {
+        await this.writeChat(chat);
+        count += chat.messages.length;
+      }
+    }
+    
+    // Force flush
+    await this.flushWrites();
+    return count;
+  }
+
+  isEnabled() {
+    return this.enabled;
+  }
+
+  getDirectoryName() {
+    return this.enabled ? this.folderName : null;
+  }
+}
+
 // ClawGPT Memory - Per-message storage for better search
 class MemoryStorage {
   constructor() {
@@ -678,7 +858,9 @@ class ClawGPT {
     this.pinnedExpanded = false;
     this.storage = new ChatStorage();
     this.memoryStorage = new MemoryStorage();
-    this.fileMemoryStorage = new FileMemoryStorage();
+    // Use MobileMemoryStorage on Capacitor (auto-creates folder), FileMemoryStorage on desktop
+    this.isMobile = typeof Capacitor !== 'undefined' && Capacitor.isNativePlatform?.();
+    this.fileMemoryStorage = this.isMobile ? new MobileMemoryStorage() : new FileMemoryStorage();
 
     this.loadSettings();
     this.initUI();
@@ -925,11 +1107,11 @@ class ClawGPT {
       if (count > 0) {
         console.log(`File memory: synced ${count} messages to disk`);
       }
-    } else {
-      // Check if this is first run and we should auto-setup
+    } else if (!this.isMobile) {
+      // Desktop only: prompt for folder selection on first run
+      // (Mobile auto-creates the folder, no prompt needed)
       const hasAskedForMemory = localStorage.getItem('clawgpt-memory-asked');
       if (!hasAskedForMemory && 'showDirectoryPicker' in window) {
-        // Prompt user to set up clawgpt-memory folder
         this.promptFileMemorySetup();
       } else {
         console.log('File memory storage not enabled (select folder in settings)');
@@ -937,7 +1119,7 @@ class ClawGPT {
     }
   }
   
-  // Prompt user to set up file memory on first run
+  // Prompt user to set up file memory on first run (desktop only)
   async promptFileMemorySetup() {
     // Mark that we've asked (so we don't ask again)
     localStorage.setItem('clawgpt-memory-asked', 'true');
