@@ -1,14 +1,32 @@
 // ClawGPT - ChatGPT-like interface for OpenClaw
 // https://github.com/openclaw/openclaw
 
-// Global error handler to prevent app crashes
+// Global error handler with visual debugging
+window._clawgptErrors = [];
 window.onerror = function(message, source, lineno, colno, error) {
-  console.error('ClawGPT Error:', message, 'at', source, lineno, colno, error);
-  return false; // Don't prevent default error handling
+  const errMsg = `ERROR: ${message} at ${source}:${lineno}:${colno}`;
+  console.error('ClawGPT Error:', errMsg, error);
+  window._clawgptErrors.push(errMsg);
+  // Show error visually if early in startup
+  if (document.body && window._clawgptErrors.length <= 3) {
+    const errDiv = document.createElement('div');
+    errDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;background:red;color:white;padding:10px;z-index:99999;font-size:12px;';
+    errDiv.textContent = errMsg;
+    document.body.appendChild(errDiv);
+  }
+  return false;
 };
 
 window.addEventListener('unhandledrejection', function(event) {
+  const errMsg = `PROMISE REJECT: ${event.reason}`;
   console.error('ClawGPT Unhandled Promise Rejection:', event.reason);
+  window._clawgptErrors.push(errMsg);
+  if (document.body && window._clawgptErrors.length <= 3) {
+    const errDiv = document.createElement('div');
+    errDiv.style.cssText = 'position:fixed;top:' + (window._clawgptErrors.length * 40) + 'px;left:0;right:0;background:orange;color:black;padding:10px;z-index:99999;font-size:12px;';
+    errDiv.textContent = errMsg;
+    document.body.appendChild(errDiv);
+  }
 });
 
 // IndexedDB wrapper for chat storage
@@ -423,50 +441,44 @@ class MobileMemoryStorage {
   }
 
   async init() {
-    // TEMPORARILY DISABLED - debugging crash on startup
-    // TODO: Re-enable once Filesystem plugin is properly configured
-    console.log('MobileMemoryStorage: Temporarily disabled for debugging');
-    return false;
-    
-    /* Original code:
     try {
+      console.log('MobileMemoryStorage: Starting init...');
+      
       // Check if Capacitor is available
       if (typeof Capacitor === 'undefined') {
         console.log('MobileMemoryStorage: Capacitor not available');
         return false;
       }
+      
+      console.log('MobileMemoryStorage: Capacitor found, checking plugins...');
+      console.log('MobileMemoryStorage: Capacitor.Plugins =', JSON.stringify(Object.keys(Capacitor.Plugins || {})));
 
-      // Try to get Filesystem plugin - Capacitor 4+ uses Capacitor.Plugins
-      // but we need to be defensive about how we access it
+      // Try to get Filesystem plugin
       let Filesystem = null;
       
-      // Try Capacitor.Plugins first (Capacitor 4+)
       if (Capacitor.Plugins?.Filesystem) {
+        console.log('MobileMemoryStorage: Found Capacitor.Plugins.Filesystem');
         Filesystem = Capacitor.Plugins.Filesystem;
-      }
-      // Try window.CapacitorCustomPlatform (some setups)
-      else if (window.CapacitorFilesystem) {
-        Filesystem = window.CapacitorFilesystem;
-      }
-      
-      if (!Filesystem) {
-        console.log('MobileMemoryStorage: Filesystem plugin not available');
+      } else {
+        console.log('MobileMemoryStorage: Filesystem plugin not in Capacitor.Plugins');
         return false;
       }
 
       this.Filesystem = Filesystem;
+      console.log('MobileMemoryStorage: Attempting to create folder...');
       
       // Create clawgpt-memory folder if it doesn't exist
       await this.ensureFolder();
       
       this.enabled = true;
-      console.log('MobileMemoryStorage: Ready (auto-created clawgpt-memory folder)');
+      console.log('MobileMemoryStorage: Ready!');
       return true;
     } catch (e) {
-      console.warn('MobileMemoryStorage: Init failed:', e);
+      console.error('MobileMemoryStorage: Init failed with error:', e);
+      console.error('MobileMemoryStorage: Error stack:', e.stack);
+      // Don't crash - just disable the feature
       return false;
     }
-    */
   }
 
   async ensureFolder() {
