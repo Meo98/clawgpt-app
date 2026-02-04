@@ -2381,10 +2381,14 @@ window.CLAWGPT_CONFIG = {
           console.log('Received keyexchange from desktop');
           if (this.relayCrypto.setPeerPublicKey(msg.publicKey)) {
             // Send our public key back
-            this.relayWs.send(JSON.stringify({
-              type: 'keyexchange',
-              publicKey: this.relayCrypto.getPublicKey()
-            }));
+            if (this.relayWs?.readyState === WebSocket.OPEN) {
+              this.relayWs.send(JSON.stringify({
+                type: 'keyexchange',
+                publicKey: this.relayCrypto.getPublicKey()
+              }));
+            } else {
+              console.warn('WebSocket not open, cannot respond to keyexchange');
+            }
             
             this.relayEncrypted = true;
             const verifyCode = this.relayCrypto.getVerificationCode();
@@ -2480,10 +2484,14 @@ window.CLAWGPT_CONFIG = {
           if (msg.event === 'channel.joined' || msg.event === 'room.joined') {
             console.log('Joined relay room, sending keyexchange...');
             // NOW send keyexchange - room is ready
-            this.relayWs.send(JSON.stringify({
-              type: 'keyexchange',
-              publicKey: this.relayCrypto.getPublicKey()
-            }));
+            if (this.relayWs?.readyState === WebSocket.OPEN) {
+              this.relayWs.send(JSON.stringify({
+                type: 'keyexchange',
+                publicKey: this.relayCrypto.getPublicKey()
+              }));
+            } else {
+              console.warn('WebSocket not open, cannot send keyexchange');
+            }
             this.setStatus('Securing connection...');
             
             // Timeout fallback: if no key exchange response in 3s, check if we're already encrypted
@@ -2540,10 +2548,14 @@ window.CLAWGPT_CONFIG = {
             }
             if (this.relayCrypto.setPeerPublicKey(msg.publicKey)) {
               // Respond with our key
-              this.relayWs.send(JSON.stringify({
-                type: 'keyexchange',
-                publicKey: this.relayCrypto.getPublicKey()
-              }));
+              if (this.relayWs?.readyState === WebSocket.OPEN) {
+                this.relayWs.send(JSON.stringify({
+                  type: 'keyexchange',
+                  publicKey: this.relayCrypto.getPublicKey()
+                }));
+              } else {
+                console.warn('WebSocket not open, cannot respond to keyexchange');
+              }
               this.relayEncrypted = true;
               const verifyCode = this.relayCrypto.getVerificationCode();
               console.log('E2E encryption established! Verification:', verifyCode);
@@ -5728,14 +5740,30 @@ Example: [0, 2, 5]`;
     if (!voiceBtn) return;
     
     // Check if we're on mobile with Capacitor
-    if (this.isMobile && typeof Capacitor !== 'undefined' && Capacitor.Plugins?.SpeechRecognition) {
-      this.initMobileVoiceInput(voiceBtn);
+    console.log('initVoiceInput: isMobile=', this.isMobile, 'Capacitor=', typeof Capacitor);
+    if (typeof Capacitor !== 'undefined') {
+      console.log('Capacitor.Plugins:', Object.keys(Capacitor.Plugins || {}));
+    }
+    
+    // Try to get SpeechRecognition plugin - check multiple possible locations
+    let speechPlugin = null;
+    if (typeof Capacitor !== 'undefined') {
+      speechPlugin = Capacitor.Plugins?.SpeechRecognition || 
+                     window.Capacitor?.Plugins?.SpeechRecognition ||
+                     window.CapacitorCommunitySpeechRecognition;
+    }
+    
+    if (this.isMobile && speechPlugin) {
+      console.log('Using Capacitor SpeechRecognition plugin');
+      this.initMobileVoiceInput(voiceBtn, speechPlugin);
       return;
     }
     
     // Fallback to browser Web Speech API
+    console.log('Falling back to Web Speech API');
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
+      console.log('Web Speech API not available');
       voiceBtn.classList.add('unsupported');
       voiceBtn.title = 'Voice input not supported in this browser';
       return;
@@ -5808,24 +5836,28 @@ Example: [0, 2, 5]`;
   
   // Mobile voice input using Capacitor Speech Recognition plugin
   // Push-to-talk: hold to record, release to send
-  async initMobileVoiceInput(voiceBtn) {
-    const { SpeechRecognition } = Capacitor.Plugins;
+  async initMobileVoiceInput(voiceBtn, speechPlugin) {
+    console.log('initMobileVoiceInput: starting with plugin:', !!speechPlugin);
     
-    this.mobileSpeech = SpeechRecognition;
+    this.mobileSpeech = speechPlugin;
     this.isRecording = false;
     
     // Check/request permission
     try {
-      const { available } = await SpeechRecognition.available();
+      const { available } = await this.mobileSpeech.available();
+      console.log('Speech recognition available:', available);
       if (!available) {
+        console.log('Speech recognition not available on this device');
         voiceBtn.classList.add('unsupported');
         voiceBtn.title = 'Speech recognition not available';
         return;
       }
       
-      const permResult = await SpeechRecognition.checkPermissions();
+      const permResult = await this.mobileSpeech.checkPermissions();
+      console.log('Speech permissions:', permResult);
       if (permResult.speechRecognition !== 'granted') {
-        const requestResult = await SpeechRecognition.requestPermissions();
+        const requestResult = await this.mobileSpeech.requestPermissions();
+        console.log('Permission request result:', requestResult);
         if (requestResult.speechRecognition !== 'granted') {
           voiceBtn.classList.add('unsupported');
           voiceBtn.title = 'Microphone permission denied';
@@ -5839,11 +5871,15 @@ Example: [0, 2, 5]`;
     }
     
     // Listen for partial results while recording
-    SpeechRecognition.addListener('partialResults', (data) => {
+    console.log('Setting up speech recognition listeners...');
+    this.mobileSpeech.addListener('partialResults', (data) => {
+      console.log('Partial results:', data);
       if (data.matches && data.matches.length > 0) {
         this.elements.messageInput.placeholder = data.matches[0] + '...';
       }
     });
+    
+    console.log('Push-to-talk initialized successfully');
     
     // Push-to-talk: touchstart = start recording, touchend = stop and send
     voiceBtn.addEventListener('touchstart', (e) => {
@@ -5881,7 +5917,11 @@ Example: [0, 2, 5]`;
   }
   
   async startPushToTalk(voiceBtn) {
-    if (!this.mobileSpeech || this.isRecording) return;
+    console.log('startPushToTalk called, mobileSpeech:', !!this.mobileSpeech, 'isRecording:', this.isRecording);
+    if (!this.mobileSpeech || this.isRecording) {
+      console.log('startPushToTalk: early return');
+      return;
+    }
     
     try {
       this.isRecording = true;
@@ -5889,11 +5929,13 @@ Example: [0, 2, 5]`;
       voiceBtn.classList.add('recording');
       this.elements.messageInput.placeholder = 'Listening...';
       
+      console.log('Starting speech recognition...');
       await this.mobileSpeech.start({
         language: navigator.language || 'en-US',
         partialResults: true,
         popup: false
       });
+      console.log('Speech recognition started successfully');
       this.speechStarted = true;  // Mark that we successfully started
       
       // Safety timeout: if held for more than 30s, auto-stop
@@ -5922,15 +5964,19 @@ Example: [0, 2, 5]`;
   }
   
   async stopPushToTalkAndSend(voiceBtn) {
+    console.log('stopPushToTalkAndSend called, mobileSpeech:', !!this.mobileSpeech, 'isRecording:', this.isRecording, 'speechStarted:', this.speechStarted);
+    
     // Always reset state, even if we think we're not recording
     // (handles edge cases where state got out of sync)
     if (!this.mobileSpeech) {
+      console.log('No mobileSpeech, resetting state');
       this.resetPushToTalkState(voiceBtn);
       return;
     }
     
     // If not recording, just make sure UI is reset
     if (!this.isRecording) {
+      console.log('Not recording, resetting state');
       this.resetPushToTalkState(voiceBtn);
       return;
     }
@@ -5939,7 +5985,11 @@ Example: [0, 2, 5]`;
       // Only try to stop if speech actually started
       let result = null;
       if (this.speechStarted) {
+        console.log('Stopping speech recognition...');
         result = await this.mobileSpeech.stop();
+        console.log('Stop result:', result);
+      } else {
+        console.log('Speech never started, skipping stop');
       }
       
       this.resetPushToTalkState(voiceBtn);
@@ -5947,12 +5997,15 @@ Example: [0, 2, 5]`;
       // If we got a transcript, put it in the input and send
       if (result && result.matches && result.matches.length > 0) {
         const transcript = result.matches[0].trim();
+        console.log('Got transcript:', transcript);
         if (transcript) {
           this.elements.messageInput.value = transcript;
           this.onInputChange();
           // Auto-send the message
           this.sendMessage();
         }
+      } else {
+        console.log('No transcript in result');
       }
     } catch (e) {
       console.error('Stop recording error:', e);
