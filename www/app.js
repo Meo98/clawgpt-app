@@ -6399,13 +6399,13 @@ Example: [0, 2, 5]`;
     
     this.voiceChatState = 'PROCESSING';
     this.updateVoiceChatUI('PROCESSING', message);
+    console.log('Voice chat: set state to PROCESSING');
     
-    // Stop speech recognition
-    try {
-      await this.mobileSpeech.stop();
-    } catch (e) {
-      // Ignore stop errors
-    }
+    // Stop speech recognition (fire and forget - don't await since it can hang)
+    console.log('Voice chat: stopping speech recognition...');
+    this.mobileSpeech.stop().catch(e => {
+      console.log('Voice chat: stop error (ignored):', e.message);
+    });
     
     console.log('Voice chat: sending message:', message);
     
