@@ -2420,7 +2420,7 @@ window.CLAWGPT_CONFIG = {
             const verifyCode = this.relayCrypto.getVerificationCode();
             console.log('E2E encryption re-established! Verification:', verifyCode);
             
-            this.showToast(`Reconnected! Verify: ${verifyCode}`);
+            // Don't show toast with verification words - just update status
             this.showRelayClientStatus(verifyCode);
             this.finalizeRelayConnection();
             
@@ -2568,7 +2568,7 @@ window.CLAWGPT_CONFIG = {
           const verifyCode = this.relayCrypto.getVerificationCode();
           console.log('E2E encryption established! Verification:', verifyCode);
           
-          this.showToast(`Secure! Verify: ${verifyCode}`);
+          // Don't show toast with verification words - just update status
           this.showRelayClientStatus(verifyCode);
           this.finalizeRelayConnection();
           
@@ -2601,7 +2601,7 @@ window.CLAWGPT_CONFIG = {
               const verifyCode = this.relayCrypto.getVerificationCode();
               console.log('E2E encryption established! Verification:', verifyCode);
               
-              this.showToast(`Secure! Verify: ${verifyCode}`);
+              // Don't show toast with verification words - just update status
               this.showRelayClientStatus(verifyCode);
               this.finalizeRelayConnection();
               
@@ -5897,8 +5897,10 @@ Example: [0, 2, 5]`;
     
     this.mobileSpeech = speechPlugin;
     this.isRecording = false;
+    this.micPermissionGranted = false;  // Track if we have permission
+    this.micPermissionChecked = false;  // Track if we've checked/requested
     
-    // Check/request permission
+    // Just check if available (don't request permission yet)
     try {
       const { available } = await this.mobileSpeech.available();
       console.log('Speech recognition available:', available);
@@ -5909,17 +5911,14 @@ Example: [0, 2, 5]`;
         return;
       }
       
+      // Check current permission status without requesting
       const permResult = await this.mobileSpeech.checkPermissions();
       console.log('Speech permissions:', permResult);
-      if (permResult.speechRecognition !== 'granted') {
-        const requestResult = await this.mobileSpeech.requestPermissions();
-        console.log('Permission request result:', requestResult);
-        if (requestResult.speechRecognition !== 'granted') {
-          voiceBtn.classList.add('unsupported');
-          voiceBtn.title = 'Microphone permission denied';
-          return;
-        }
+      if (permResult.speechRecognition === 'granted') {
+        this.micPermissionGranted = true;
+        this.micPermissionChecked = true;
       }
+      // Don't request permission here - wait until user taps mic
     } catch (e) {
       console.error('Speech recognition init error:', e);
       voiceBtn.classList.add('unsupported');
@@ -6049,11 +6048,42 @@ Example: [0, 2, 5]`;
     });
   }
   
+  // Request microphone permission (called on first use)
+  async requestMicPermission() {
+    if (this.micPermissionGranted) return true;
+    if (!this.mobileSpeech) return false;
+    
+    try {
+      console.log('Requesting microphone permission...');
+      const requestResult = await this.mobileSpeech.requestPermissions();
+      console.log('Permission request result:', requestResult);
+      this.micPermissionChecked = true;
+      
+      if (requestResult.speechRecognition === 'granted') {
+        this.micPermissionGranted = true;
+        return true;
+      } else {
+        this.showToast('Microphone permission required for voice input', true);
+        return false;
+      }
+    } catch (e) {
+      console.error('Permission request error:', e);
+      this.showToast('Could not request microphone permission', true);
+      return false;
+    }
+  }
+  
   async startPushToTalk(voiceBtn) {
     console.log('startPushToTalk called, mobileSpeech:', !!this.mobileSpeech, 'isRecording:', this.isRecording);
     if (!this.mobileSpeech || this.isRecording) {
       console.log('startPushToTalk: early return');
       return;
+    }
+    
+    // Request permission on first use
+    if (!this.micPermissionGranted) {
+      const granted = await this.requestMicPermission();
+      if (!granted) return;
     }
     
     try {
@@ -6188,10 +6218,16 @@ Example: [0, 2, 5]`;
   // ==================== VOICE CHAT MODE ====================
   // Continuous voice conversation: speak → AI responds with TTS → listen again
   
-  enterVoiceChatMode() {
+  async enterVoiceChatMode() {
     if (!this.mobileSpeech) {
       this.showToast('Voice input not available', true);
       return;
+    }
+    
+    // Request permission on first use
+    if (!this.micPermissionGranted) {
+      const granted = await this.requestMicPermission();
+      if (!granted) return;
     }
     
     console.log('Entering voice chat mode');
