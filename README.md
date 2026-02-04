@@ -11,6 +11,17 @@ A ChatGPT-like mobile app for OpenClaw. Connect to your personal AI from anywher
 - Voice input
 - Search across all chats
 
+### Cross-Device Memory Sync
+
+Your conversations sync automatically between mobile and desktop:
+
+1. **Scan QR** — Open ClawGPT on desktop, scan QR with mobile app
+2. **Chat anywhere** — Start on phone, continue on desktop
+3. **Auto-sync** — Messages sync in real-time via encrypted relay
+4. **Persistent** — Desktop saves to `clawgpt-memory/` folder for your OpenClaw agent to read
+
+This means your OpenClaw agent can recall conversations from ClawGPT, regardless of which device you used.
+
 ## Building
 
 ### Prerequisites
