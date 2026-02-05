@@ -3249,9 +3249,34 @@ window.CLAWGPT_CONFIG = {
         // If voice chat mode is active, speak the response
         console.log('Assistant message received, voiceChatActive:', this.voiceChatActive, 'pendingResponse:', this.voiceChatPendingResponse);
         if (this.voiceChatActive && this.voiceChatPendingResponse) {
-          // Skip if streaming TTS already handling this response
+          // If streaming TTS was active, queue any remaining unspoken text
           if (this.ttsSpokenText || this.ttsSpeaking || (this.ttsQueue && this.ttsQueue.length > 0)) {
-            console.log('Skipping handleVoiceChatResponse - streaming TTS already active');
+            const fullText = newMsg.content || '';
+            const spokenLen = this.ttsSpokenText?.length || 0;
+            const remaining = fullText.substring(spokenLen).trim();
+            
+            if (remaining) {
+              console.log('Streaming TTS: queueing remaining text:', remaining.substring(0, 50) + '...');
+              this.ttsQueue.push(remaining);
+              this.ttsSpokenText = fullText;
+              
+              // Mark streaming done so speakNextInQueue resumes listening after
+              this.voiceChatStreamingDone = true;
+              
+              // Start speaking if not already
+              if (!this.ttsSpeaking) {
+                this.speakNextInQueue();
+              }
+            } else {
+              console.log('Streaming TTS: no remaining text to speak');
+              // If nothing in queue and not speaking, resume listening
+              if (!this.ttsSpeaking && this.ttsQueue.length === 0) {
+                this.voiceChatPendingResponse = false;
+                this.voiceChatStreamingDone = false;
+                this.ttsSpokenText = '';
+                this.startVoiceChatListening();
+              }
+            }
           } else {
             // Check if this response is for our current pending message (not a stale one)
             const msgTime = newMsg.timestamp || Date.now();
