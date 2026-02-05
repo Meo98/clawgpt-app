@@ -3147,15 +3147,11 @@ window.CLAWGPT_CONFIG = {
         }
       }
 
-      // Switch to this chat if we initiated it
-      if (!this.currentChatId || this.currentChatId === chatId) {
-        this.currentChatId = chatId;
-      }
+      // Always switch to this chat when receiving updates (ensures user messages show)
+      this.currentChatId = chatId;
 
       this.renderChatList();
-      if (this.currentChatId === chatId) {
-        this.renderMessages();
-      }
+      this.renderMessages(); // Always render since we switched to this chat
 
       console.log(`[Relay] Message update for chat: ${chat.title}`);
       return;
