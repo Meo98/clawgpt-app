@@ -6941,6 +6941,12 @@ Example: [0, 2, 5]`;
       return;
     }
 
+    // If streaming TTS is active, let it handle everything
+    if (this.ttsSpeaking || (this.ttsQueue && this.ttsQueue.length > 0)) {
+      console.log('Voice chat: streaming TTS active, skipping check');
+      return;
+    }
+
     console.log('Voice chat: checking for missed response...');
 
     // Check if there's an assistant message we haven't spoken yet
