@@ -1029,6 +1029,7 @@ class ClawGPT {
       // Check if we were the HOST (have pairing-id that matches saved room)
       if (savedPairingId && savedRelay.roomId === savedPairingId) {
         console.log('Reconnecting to relay as host...');
+        this.isReconnecting = true;
         try {
           // Initialize crypto for host
           this.relayCrypto = new RelayCrypto();
@@ -1037,15 +1038,19 @@ class ClawGPT {
           // Reconnect to the same room as host
           await this.connectToRelayRoom(savedRelay.server, savedRelay.roomId);
           console.log('Auto-reconnected to relay room as host');
+          this.isReconnecting = false;
           return; // Don't show setup wizard
         } catch (e) {
           console.error('Failed to reconnect as host:', e);
+          this.isReconnecting = false;
           // Fall through to setup wizard
         }
       } else {
         // We were the CLIENT - use client reconnect logic
         console.log('Found saved relay connection, reconnecting as client...');
+        this.isReconnecting = true;
         const reconnected = await this.reconnectToRelay();
+        this.isReconnecting = false;
         if (reconnected) {
           return; // Don't show setup wizard - we're reconnecting via relay
         }
