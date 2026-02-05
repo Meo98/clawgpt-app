@@ -2828,6 +2828,12 @@ window.CLAWGPT_CONFIG = {
     this.streamBuffer = '';
     this.streaming = false;
     
+    // Clear streaming TTS state
+    this.ttsQueue = [];
+    this.ttsSpeaking = false;
+    this.ttsSpokenText = '';
+    this.voiceChatStreamingDone = false;
+    
     // Reset to listening state and start listening immediately
     this.voiceChatState = 'LISTENING';
     this.startVoiceChatListening();
@@ -3136,6 +3142,40 @@ window.CLAWGPT_CONFIG = {
       this.updateStreamingUI();
       this.renderMessages();
 
+      // STREAMING TTS: Queue sentences as they arrive
+      if (this.voiceChatActive && this.voiceChatPendingResponse) {
+        const msgTime = msg.timestamp || Date.now();
+        const voiceChatStartTime = this.voiceChatMessageTime || 0;
+        
+        if (msgTime >= voiceChatStartTime) {
+          // Find new complete sentences to speak
+          const fullText = msg.content || '';
+          const spokenLen = this.ttsSpokenText?.length || 0;
+          const newText = fullText.substring(spokenLen);
+          
+          // Look for sentence boundaries in new text
+          const sentenceEndRegex = /[.!?]\s+|[.!?]$/;
+          const match = newText.match(sentenceEndRegex);
+          
+          if (match) {
+            // Found a sentence end - queue everything up to and including it
+            const endIndex = match.index + match[0].length;
+            const sentenceToSpeak = newText.substring(0, endIndex).trim();
+            
+            if (sentenceToSpeak) {
+              console.log('Streaming TTS: queueing sentence:', sentenceToSpeak.substring(0, 50) + '...');
+              this.ttsQueue.push(sentenceToSpeak);
+              this.ttsSpokenText = fullText.substring(0, spokenLen + endIndex);
+              
+              // Start speaking if not already
+              if (!this.ttsSpeaking) {
+                this.speakNextInQueue();
+              }
+            }
+          }
+        }
+      }
+
       // If voice chat is waiting and streaming just ended (content is complete)
       if (this.voiceChatActive && this.voiceChatPendingResponse && msg.done) {
         // Check timestamp to avoid replaying old responses after interrupt
@@ -3143,8 +3183,28 @@ window.CLAWGPT_CONFIG = {
         const voiceChatStartTime = this.voiceChatMessageTime || 0;
         
         if (msgTime >= voiceChatStartTime) {
-          console.log('Streaming done, triggering voice chat response');
-          this.handleVoiceChatResponse(msg.content);
+          console.log('Streaming done, speaking any remaining text');
+          // Speak any remaining text that wasn't a complete sentence
+          const fullText = msg.content || '';
+          const spokenLen = this.ttsSpokenText?.length || 0;
+          const remaining = fullText.substring(spokenLen).trim();
+          
+          if (remaining) {
+            console.log('Streaming TTS: queueing final chunk:', remaining.substring(0, 50) + '...');
+            this.ttsQueue.push(remaining);
+            this.ttsSpokenText = fullText;
+          }
+          
+          // Mark that streaming is done - speakNextInQueue will handle resuming listening
+          this.voiceChatStreamingDone = true;
+          
+          if (!this.ttsSpeaking && this.ttsQueue.length > 0) {
+            this.speakNextInQueue();
+          } else if (!this.ttsSpeaking && this.ttsQueue.length === 0) {
+            // Nothing to speak, resume listening
+            this.voiceChatPendingResponse = false;
+            this.startVoiceChatListening();
+          }
         } else {
           console.log('Ignoring stale streaming response after interrupt');
         }
@@ -6451,6 +6511,11 @@ Example: [0, 2, 5]`;
     // Clear old stream buffer to prevent reading stale responses
     this.streamBuffer = '';
     this.streaming = false;
+    
+    // Streaming TTS state
+    this.ttsQueue = [];
+    this.ttsSpeaking = false;
+    this.ttsSpokenText = ''; // Track what we've already queued for TTS
 
     // Create and show overlay
     this.showVoiceChatOverlay();
@@ -6668,6 +6733,12 @@ Example: [0, 2, 5]`;
     this.streamBuffer = '';
     this.streaming = false;
     
+    // Clear streaming TTS state for new message
+    this.ttsQueue = [];
+    this.ttsSpeaking = false;
+    this.ttsSpokenText = '';
+    this.voiceChatStreamingDone = false;
+    
     // Track when we sent this message to avoid replaying old responses
     this.voiceChatMessageTime = Date.now();
 
@@ -6709,6 +6780,71 @@ Example: [0, 2, 5]`;
     } else {
       this.showToast('Not connected', true);
       this.exitVoiceChatMode();
+    }
+  }
+
+  // Streaming TTS: speak next sentence in queue
+  async speakNextInQueue() {
+    if (!this.voiceChatActive || this.ttsQueue.length === 0) {
+      this.ttsSpeaking = false;
+      
+      // If streaming is done and queue is empty, resume listening
+      if (this.voiceChatStreamingDone) {
+        console.log('Streaming TTS: all done, resuming listening');
+        this.voiceChatPendingResponse = false;
+        this.voiceChatStreamingDone = false;
+        this.ttsSpokenText = '';
+        this.startVoiceChatListening();
+      }
+      return;
+    }
+
+    this.ttsSpeaking = true;
+    this.voiceChatState = 'SPEAKING';
+    this.updateVoiceChatUI('SPEAKING');
+
+    // Initialize TTS if needed
+    if (!this.tts && typeof Capacitor !== 'undefined' && Capacitor.Plugins?.TextToSpeech) {
+      this.tts = Capacitor.Plugins.TextToSpeech;
+    }
+
+    if (!this.tts) {
+      console.log('TTS not available');
+      this.ttsSpeaking = false;
+      return;
+    }
+
+    const text = this.ttsQueue.shift();
+    const cleanText = this.stripMarkdownForTTS(text);
+    
+    if (!cleanText) {
+      // Skip empty text, try next in queue
+      this.speakNextInQueue();
+      return;
+    }
+
+    try {
+      console.log('Streaming TTS: speaking:', cleanText.substring(0, 50) + '...');
+      
+      await this.tts.speak({
+        text: cleanText,
+        lang: 'en-GB',
+        rate: 1.0,
+        pitch: 1.0,
+        volume: 1.0,
+        category: 'playback'
+      });
+
+      // Speak next in queue (or finish)
+      this.speakNextInQueue();
+
+    } catch (e) {
+      console.error('Streaming TTS error:', e);
+      this.ttsSpeaking = false;
+      // Try to continue with next sentence
+      if (this.ttsQueue.length > 0) {
+        this.speakNextInQueue();
+      }
     }
   }
 
