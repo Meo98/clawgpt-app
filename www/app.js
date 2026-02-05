@@ -6660,6 +6660,10 @@ Example: [0, 2, 5]`;
     this.updateVoiceChatUI('PROCESSING', message);
     console.log('Voice chat: set state to PROCESSING');
     
+    // Clear old stream buffer to prevent replaying previous responses
+    this.streamBuffer = '';
+    this.streaming = false;
+    
     // Track when we sent this message to avoid replaying old responses
     this.voiceChatMessageTime = Date.now();
 
