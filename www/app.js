@@ -3269,7 +3269,10 @@ window.CLAWGPT_CONFIG = {
               }
             } else {
               console.log('Streaming TTS: no remaining text to speak');
-              // If nothing in queue and not speaking, resume listening
+              // Mark streaming done so speakNextInQueue resumes listening when TTS finishes
+              this.voiceChatStreamingDone = true;
+              
+              // If nothing in queue and not currently speaking, resume listening now
               if (!this.ttsSpeaking && this.ttsQueue.length === 0) {
                 this.voiceChatPendingResponse = false;
                 this.voiceChatStreamingDone = false;
