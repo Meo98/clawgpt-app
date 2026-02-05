@@ -5081,7 +5081,7 @@ Example: [0, 2, 5]`;
     this.renderChatList();
     this.updateTokenDisplay();
     this.elements.messageInput.focus();
-    this.elements.sidebar.classList.remove('open');
+    this.closeSidebar();
   }
   
   // Send /forget command to clear gateway session context
@@ -5134,7 +5134,7 @@ Example: [0, 2, 5]`;
     this.scrollToBottom(true);  // Force scroll to bottom when switching chats
     this.renderChatList();
     this.updateTokenDisplay(); // Also updates model display
-    this.elements.sidebar.classList.remove('open');
+    this.closeSidebar();
   }
 
   deleteChat(chatId) {
