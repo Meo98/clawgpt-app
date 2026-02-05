@@ -3249,15 +3249,20 @@ window.CLAWGPT_CONFIG = {
         // If voice chat mode is active, speak the response
         console.log('Assistant message received, voiceChatActive:', this.voiceChatActive, 'pendingResponse:', this.voiceChatPendingResponse);
         if (this.voiceChatActive && this.voiceChatPendingResponse) {
-          // Check if this response is for our current pending message (not a stale one)
-          const msgTime = newMsg.timestamp || Date.now();
-          const voiceChatStartTime = this.voiceChatMessageTime || 0;
-          
-          if (msgTime >= voiceChatStartTime) {
-            console.log('Triggering voice chat response with content length:', newMsg.content?.length);
-            this.handleVoiceChatResponse(newMsg.content);
+          // Skip if streaming TTS already handling this response
+          if (this.ttsSpokenText || this.ttsSpeaking || (this.ttsQueue && this.ttsQueue.length > 0)) {
+            console.log('Skipping handleVoiceChatResponse - streaming TTS already active');
           } else {
-            console.log('Ignoring stale voice chat response (msg time:', msgTime, 'vs start time:', voiceChatStartTime, ')');
+            // Check if this response is for our current pending message (not a stale one)
+            const msgTime = newMsg.timestamp || Date.now();
+            const voiceChatStartTime = this.voiceChatMessageTime || 0;
+          
+            if (msgTime >= voiceChatStartTime) {
+              console.log('Triggering voice chat response with content length:', newMsg.content?.length);
+              this.handleVoiceChatResponse(newMsg.content);
+            } else {
+              console.log('Ignoring stale voice chat response (msg time:', msgTime, 'vs start time:', voiceChatStartTime, ')');
+            }
           }
         }
       }
