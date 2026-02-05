@@ -6447,6 +6447,10 @@ Example: [0, 2, 5]`;
     this.voiceChatState = 'LISTENING'; // LISTENING, PROCESSING, SPEAKING
     this.voiceChatTranscript = '';
     this.silenceTimeout = null;
+    
+    // Clear old stream buffer to prevent reading stale responses
+    this.streamBuffer = '';
+    this.streaming = false;
 
     // Create and show overlay
     this.showVoiceChatOverlay();
