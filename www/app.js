@@ -2928,21 +2928,14 @@ window.CLAWGPT_CONFIG = {
       }
     }
     
-    // Show appropriate help sections based on platform
+    // Show mobile-specific help sections on mobile (keep all keyboard shortcuts visible)
     const mobileGesturesGroup = document.getElementById('mobileGesturesGroup');
     const voiceGroup = document.getElementById('voiceGroup');
-    const desktopShortcutsGroup = document.getElementById('desktopShortcutsGroup');
-    const searchShortcutsGroup = document.getElementById('searchShortcutsGroup');
-    const editingShortcutsGroup = document.getElementById('editingShortcutsGroup');
     
     if (this.isMobile) {
-      // Show mobile-specific sections
+      // Show mobile-specific sections (keyboard shortcuts stay visible)
       if (mobileGesturesGroup) mobileGesturesGroup.style.display = '';
       if (voiceGroup) voiceGroup.style.display = '';
-      // Hide desktop keyboard shortcuts
-      if (desktopShortcutsGroup) desktopShortcutsGroup.style.display = 'none';
-      if (searchShortcutsGroup) searchShortcutsGroup.style.display = 'none';
-      if (editingShortcutsGroup) editingShortcutsGroup.style.display = 'none';
     }
 
     // Apply saved collapse state
