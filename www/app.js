@@ -2901,8 +2901,21 @@ window.CLAWGPT_CONFIG = {
       searchBtnCollapsed.addEventListener('click', () => this.openSearch());
     }
 
+    // Scan QR button in sidebar (mobile only)
+    const sidebarScanQrBtn = document.getElementById('sidebarScanQrBtn');
+    if (sidebarScanQrBtn && this.isMobile) {
+      sidebarScanQrBtn.style.display = '';
+      sidebarScanQrBtn.addEventListener('click', () => {
+        this.closeSidebar();
+        this.scanQRCode();
+      });
+    }
+
     // Apply saved collapse state
     this.applySidebarCollapseState();
+
+    // Swipe gestures for sidebar (mobile only)
+    this.initSwipeGestures();
 
     this.elements.darkMode.addEventListener('change', (e) => {
       this.darkMode = e.target.checked;
@@ -3135,6 +3148,55 @@ window.CLAWGPT_CONFIG = {
     if (overlay) {
       overlay.classList.remove('active');
     }
+  }
+
+  initSwipeGestures() {
+    if (!this.isMobile) return;
+
+    let startX = 0;
+    let startY = 0;
+    let tracking = false;
+
+    document.addEventListener('touchstart', (e) => {
+      // Ignore touches on inputs, voice button, and open modals
+      const target = e.target;
+      const tag = target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (target.closest('.voice-btn') || target.closest('.voice-chat-overlay')) return;
+      if (target.closest('.modal.open')) return;
+
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      tracking = true;
+    }, { passive: true });
+
+    document.addEventListener('touchmove', () => {
+      // Intentionally empty - we only need start and end
+    }, { passive: true });
+
+    document.addEventListener('touchend', (e) => {
+      if (!tracking) return;
+      tracking = false;
+
+      const touch = e.changedTouches[0];
+      const dx = touch.clientX - startX;
+      const dy = touch.clientY - startY;
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+
+      // Must exceed 60px threshold and horizontal must exceed vertical by 1.5x
+      if (absDx < 60 || absDx < absDy * 1.5) return;
+
+      const sidebarOpen = this.elements.sidebar.classList.contains('open');
+
+      if (dx > 0 && !sidebarOpen) {
+        // Swipe right -> open sidebar
+        this.toggleSidebar();
+      } else if (dx < 0 && sidebarOpen) {
+        // Swipe left -> close sidebar
+        this.closeSidebar();
+      }
+    }, { passive: true });
   }
 
   toggleSidebarCollapse() {
