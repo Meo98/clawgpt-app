@@ -230,8 +230,29 @@ class ChatStorage {
       const store = transaction.objectStore(this.storeName);
       store.put(chat);
       transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
+      transaction.onerror = (e) => {
+        console.error('Failed to save chat:', e);
+        this.checkStorageQuota();
+        reject(transaction.error);
+      };
     });
+  }
+
+  async checkStorageQuota() {
+    if (navigator.storage && navigator.storage.estimate) {
+      try {
+        const estimate = await navigator.storage.estimate();
+        const usedMB = Math.round((estimate.usage || 0) / 1024 / 1024);
+        const quotaMB = Math.round((estimate.quota || 0) / 1024 / 1024);
+        const usedPercent = quotaMB > 0 ? Math.round((usedMB / quotaMB) * 100) : 0;
+        if (usedPercent > 90) {
+          console.warn(`Storage nearly full: ${usedMB}MB / ${quotaMB}MB (${usedPercent}%)`);
+          showErrorBanner(`Storage nearly full (${usedPercent}%). Consider deleting old chats.`, true);
+        }
+      } catch (e) {
+        // Silently ignore quota check failures
+      }
+    }
   }
 
   async deleteOne(chatId) {
@@ -1128,6 +1149,7 @@ class ClawGPT {
       const success = await this.reconnectToRelay();
       if (success) {
         console.log('Auto-reconnect successful');
+        this._relayReconnectAttempts = 0; // Reset backoff on success
         // Don't show verification words on reconnect - just "Connected"
         this.setStatus('Connected', true);
       } else {
@@ -2375,7 +2397,17 @@ window.CLAWGPT_CONFIG = {
       return false;
     }
 
+    // Connection timeout - close if not connected within 30 seconds
+    const reconnectTimeout = setTimeout(() => {
+      if (this.relayWs && this.relayWs.readyState !== WebSocket.OPEN) {
+        console.warn('Relay reconnection timed out after 30s');
+        this.relayWs.close();
+        this.setStatus('Connection timed out');
+      }
+    }, 30000);
+
     this.relayWs.onopen = () => {
+      clearTimeout(reconnectTimeout);
       console.log('Reconnected to relay room, waiting for desktop...');
       this.setStatus('Waiting for desktop...');
 
@@ -2462,6 +2494,26 @@ window.CLAWGPT_CONFIG = {
       } else {
         this.setStatus('Disconnected');
       }
+
+      // Auto-reconnect with exponential backoff
+      const saved = this.getSavedRelayConnection();
+      if (saved && event.code !== 1000) { // Don't reconnect on normal close
+        const delay = Math.min(3000 * Math.pow(2, (this._relayReconnectAttempts || 0)), 60000);
+        this._relayReconnectAttempts = (this._relayReconnectAttempts || 0) + 1;
+        console.log(`Relay auto-reconnect in ${delay/1000}s (attempt ${this._relayReconnectAttempts})`);
+        this.setStatus(`Reconnecting in ${Math.round(delay/1000)}s...`);
+        this._relayReconnectTimer = setTimeout(async () => {
+          try {
+            const success = await this.reconnectToRelay();
+            if (success) {
+              console.log('Relay auto-reconnect successful');
+              this._relayReconnectAttempts = 0;
+            }
+          } catch (e) {
+            console.error('Relay auto-reconnect failed:', e);
+          }
+        }, delay);
+      }
     };
 
     return true;
@@ -2517,7 +2569,18 @@ window.CLAWGPT_CONFIG = {
       return;
     }
 
+    // Connection timeout
+    const joinTimeout = setTimeout(() => {
+      if (this.relayWs && this.relayWs.readyState !== WebSocket.OPEN) {
+        console.warn('Relay join timed out after 30s');
+        this.relayWs.close();
+        this.showToast('Connection timed out', true);
+        this.setStatus('Connection timed out');
+      }
+    }, 30000);
+
     this.relayWs.onopen = () => {
+      clearTimeout(joinTimeout);
       console.log('Connected to relay WebSocket, waiting for room.joined...');
       // Don't send keyexchange here - wait for room.joined event
     };
@@ -2660,6 +2723,26 @@ window.CLAWGPT_CONFIG = {
       }
 
       // Don't destroy relayCrypto - may be reused for reconnection
+
+      // Auto-reconnect with exponential backoff on abnormal close
+      const saved = this.getSavedRelayConnection();
+      if (saved && event.code !== 1000) {
+        const delay = Math.min(3000 * Math.pow(2, (this._relayReconnectAttempts || 0)), 60000);
+        this._relayReconnectAttempts = (this._relayReconnectAttempts || 0) + 1;
+        console.log(`Relay auto-reconnect in ${delay/1000}s (attempt ${this._relayReconnectAttempts})`);
+        this.setStatus(`Reconnecting in ${Math.round(delay/1000)}s...`);
+        this._relayReconnectTimer = setTimeout(async () => {
+          try {
+            const success = await this.reconnectToRelay();
+            if (success) {
+              console.log('Relay auto-reconnect successful');
+              this._relayReconnectAttempts = 0;
+            }
+          } catch (e) {
+            console.error('Relay auto-reconnect failed:', e);
+          }
+        }, delay);
+      }
     };
   }
 
