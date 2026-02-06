@@ -1,978 +1,3 @@
-// ClawGPT - ChatGPT-like interface for OpenClaw
-// https://github.com/openclaw/openclaw
-
-// Global error handler with visual debugging + Copy Logs button
-window._clawgptErrors = [];
-window._clawgptLogs = [];
-
-// Log collector - captures all console output
-(function() {
-  const origLog = console.log;
-  const origWarn = console.warn;
-  const origError = console.error;
-  const maxLogs = 200;
-
-  function addLog(level, args) {
-    const msg = `[${level}] ${Array.from(args).map(a => {
-      try { return typeof a === 'object' ? JSON.stringify(a) : String(a); }
-      catch { return String(a); }
-    }).join(' ')}`;
-    window._clawgptLogs.push(msg);
-    if (window._clawgptLogs.length > maxLogs) window._clawgptLogs.shift();
-  }
-
-  console.log = function(...args) { addLog('LOG', args); origLog.apply(console, args); };
-  console.warn = function(...args) { addLog('WARN', args); origWarn.apply(console, args); };
-  console.error = function(...args) { addLog('ERROR', args); origError.apply(console, args); };
-})();
-
-// Show error banner with Copy Logs button
-function showErrorBanner(errMsg, isWarning) {
-  if (!document.body) return;
-
-  // Remove existing error banners (keep only one at a time)
-  document.querySelectorAll('.clawgpt-error-banner').forEach(el => el.remove());
-
-  const banner = document.createElement('div');
-  banner.className = 'clawgpt-error-banner';
-  banner.style.cssText = `
-    position: fixed; top: 0; left: 0; right: 0; z-index: 99999;
-    background: ${isWarning ? '#e67e22' : '#e74c3c'}; color: white;
-    padding: 12px 15px; font-size: 13px; font-family: system-ui, sans-serif;
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  `;
-
-  const msgSpan = document.createElement('span');
-  msgSpan.style.cssText = 'flex: 1; min-width: 200px; word-break: break-word;';
-  msgSpan.textContent = errMsg;
-
-  const copyBtn = document.createElement('button');
-  copyBtn.textContent = 'Copy Logs';
-  copyBtn.style.cssText = `
-    background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4);
-    color: white; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;
-  `;
-  copyBtn.onclick = function() {
-    const fullLog = [
-      '=== ClawGPT Error Log ===',
-      'Time: ' + new Date().toISOString(),
-      'UserAgent: ' + navigator.userAgent,
-      '',
-      '=== Errors ===',
-      ...window._clawgptErrors,
-      '',
-      '=== Recent Logs ===',
-      ...window._clawgptLogs.slice(-50)
-    ].join('\n');
-
-    navigator.clipboard.writeText(fullLog).then(() => {
-      copyBtn.textContent = 'Copied!';
-      setTimeout(() => copyBtn.textContent = 'Copy Logs', 2000);
-    }).catch(() => {
-      // Fallback
-      const ta = document.createElement('textarea');
-      ta.value = fullLog;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      copyBtn.textContent = 'Copied!';
-      setTimeout(() => copyBtn.textContent = 'Copy Logs', 2000);
-    });
-  };
-
-  const closeBtn = document.createElement('button');
-  closeBtn.textContent = '×';
-  closeBtn.style.cssText = `
-    background: none; border: none; color: white; font-size: 20px;
-    cursor: pointer; padding: 0 5px; line-height: 1;
-  `;
-  closeBtn.onclick = () => banner.remove();
-
-  banner.appendChild(msgSpan);
-  banner.appendChild(copyBtn);
-  banner.appendChild(closeBtn);
-  document.body.appendChild(banner);
-}
-
-window.onerror = function(message, source, lineno, colno, error) {
-  const errMsg = `ERROR: ${message} at ${source}:${lineno}:${colno}`;
-  console.error('ClawGPT Error:', errMsg, error);
-  window._clawgptErrors.push(errMsg);
-  showErrorBanner(errMsg, false);
-  return false;
-};
-
-window.addEventListener('unhandledrejection', function(event) {
-  const errMsg = `PROMISE REJECT: ${event.reason}`;
-  console.error('ClawGPT Unhandled Promise Rejection:', event.reason);
-  window._clawgptErrors.push(errMsg);
-  showErrorBanner(errMsg, true);
-});
-
-// IndexedDB wrapper for chat storage
-class ChatStorage {
-  constructor() {
-    this.dbName = 'clawgpt';
-    this.dbVersion = 1;
-    this.storeName = 'chats';
-    this.db = null;
-  }
-
-  async init() {
-    if (this.db) return this.db;
-
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, this.dbVersion);
-
-      request.onerror = () => {
-        console.warn('IndexedDB not available, falling back to localStorage');
-        this.useFallback = true;
-        resolve(null);
-      };
-
-      request.onsuccess = (event) => {
-        this.db = event.target.result;
-        resolve(this.db);
-      };
-
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-        if (!db.objectStoreNames.contains(this.storeName)) {
-          db.createObjectStore(this.storeName, { keyPath: 'id' });
-        }
-      };
-    });
-  }
-
-  async loadAll() {
-    // Migrate from localStorage if needed
-    const legacyData = localStorage.getItem('clawgpt-chats');
-
-    if (this.useFallback) {
-      return legacyData ? JSON.parse(legacyData) : {};
-    }
-
-    await this.init();
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction([this.storeName], 'readonly');
-      const store = transaction.objectStore(this.storeName);
-      const request = store.getAll();
-
-      request.onsuccess = () => {
-        const chats = {};
-        request.result.forEach(chat => {
-          chats[chat.id] = chat;
-        });
-
-        // If IndexedDB is empty but localStorage has data, migrate it
-        if (Object.keys(chats).length === 0 && legacyData) {
-          const legacy = JSON.parse(legacyData);
-          this.saveAll(legacy).then(() => {
-            // Clear localStorage after successful migration
-            localStorage.removeItem('clawgpt-chats');
-            console.log('Migrated chats from localStorage to IndexedDB');
-          });
-          resolve(legacy);
-        } else {
-          resolve(chats);
-        }
-      };
-
-      request.onerror = () => {
-        console.error('Failed to load chats from IndexedDB');
-        resolve(legacyData ? JSON.parse(legacyData) : {});
-      };
-    });
-  }
-
-  async saveAll(chats) {
-    if (this.useFallback) {
-      localStorage.setItem('clawgpt-chats', JSON.stringify(chats));
-      return;
-    }
-
-    await this.init();
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction([this.storeName], 'readwrite');
-      const store = transaction.objectStore(this.storeName);
-
-      // Clear and re-add all (simple approach)
-      store.clear();
-
-      Object.values(chats).forEach(chat => {
-        store.put(chat);
-      });
-
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => {
-        console.error('Failed to save chats to IndexedDB, using localStorage fallback');
-        localStorage.setItem('clawgpt-chats', JSON.stringify(chats));
-        resolve();
-      };
-    });
-  }
-
-  async saveOne(chat) {
-    if (this.useFallback) {
-      const all = JSON.parse(localStorage.getItem('clawgpt-chats') || '{}');
-      all[chat.id] = chat;
-      localStorage.setItem('clawgpt-chats', JSON.stringify(all));
-      return;
-    }
-
-    await this.init();
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction([this.storeName], 'readwrite');
-      const store = transaction.objectStore(this.storeName);
-      store.put(chat);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = (e) => {
-        console.error('Failed to save chat:', e);
-        this.checkStorageQuota();
-        reject(transaction.error);
-      };
-    });
-  }
-
-  async checkStorageQuota() {
-    if (navigator.storage && navigator.storage.estimate) {
-      try {
-        const estimate = await navigator.storage.estimate();
-        const usedMB = Math.round((estimate.usage || 0) / 1024 / 1024);
-        const quotaMB = Math.round((estimate.quota || 0) / 1024 / 1024);
-        const usedPercent = quotaMB > 0 ? Math.round((usedMB / quotaMB) * 100) : 0;
-        if (usedPercent > 90) {
-          console.warn(`Storage nearly full: ${usedMB}MB / ${quotaMB}MB (${usedPercent}%)`);
-          showErrorBanner(`Storage nearly full (${usedPercent}%). Consider deleting old chats.`, true);
-        }
-      } catch (e) {
-        // Silently ignore quota check failures
-      }
-    }
-  }
-
-  async deleteOne(chatId) {
-    if (this.useFallback) {
-      const all = JSON.parse(localStorage.getItem('clawgpt-chats') || '{}');
-      delete all[chatId];
-      localStorage.setItem('clawgpt-chats', JSON.stringify(all));
-      return;
-    }
-
-    await this.init();
-
-    return new Promise((resolve, reject) => {
-      const transaction = this.db.transaction([this.storeName], 'readwrite');
-      const store = transaction.objectStore(this.storeName);
-      store.delete(chatId);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
-  }
-}
-
-// ClawGPT Memory - File-based persistent storage for cross-device sync
-// This writes messages to files that can be accessed by external tools (like OpenClaw agents)
-// Default folder: clawgpt-memory/ in the app directory
-class FileMemoryStorage {
-  constructor() {
-    this.dirHandle = null;
-    this.dbName = 'clawgpt-file-handles';
-    this.db = null;
-    this.enabled = false;
-    this.pendingWrites = [];
-    this.writeDebounce = null;
-    this.defaultFolderName = 'clawgpt-memory';
-  }
-
-  async init() {
-    // Check if File System Access API is available
-    if (!('showDirectoryPicker' in window)) {
-      console.log('FileMemoryStorage: File System Access API not available');
-      return false;
-    }
-
-    // Try to restore saved directory handle
-    await this.initDB();
-    const restored = await this.restoreHandle();
-    if (restored) {
-      this.enabled = true;
-      console.log('FileMemoryStorage: Restored saved directory handle');
-    }
-    return this.enabled;
-  }
-
-  // Auto-setup: prompt user to select the clawgpt-memory folder on first run
-  async autoSetup() {
-    if (this.enabled) return true; // Already set up
-
-    // Check if File System Access API is available
-    if (!('showDirectoryPicker' in window)) {
-      console.log('FileMemoryStorage: Auto-setup skipped (API not available)');
-      return false;
-    }
-
-    return await this.selectDirectory(true);
-  }
-
-  async initDB() {
-    return new Promise((resolve) => {
-      const request = indexedDB.open(this.dbName, 1);
-      request.onerror = () => resolve(null);
-      request.onsuccess = (e) => {
-        this.db = e.target.result;
-        resolve(this.db);
-      };
-      request.onupgradeneeded = (e) => {
-        const db = e.target.result;
-        if (!db.objectStoreNames.contains('handles')) {
-          db.createObjectStore('handles', { keyPath: 'id' });
-        }
-      };
-    });
-  }
-
-  async restoreHandle() {
-    if (!this.db) return false;
-
-    return new Promise(async (resolve) => {
-      try {
-        const tx = this.db.transaction(['handles'], 'readonly');
-        const store = tx.objectStore('handles');
-        const req = store.get('memoryDir');
-
-        req.onsuccess = async () => {
-          if (req.result?.handle) {
-            // Verify we still have permission
-            const permission = await req.result.handle.queryPermission({ mode: 'readwrite' });
-            if (permission === 'granted') {
-              this.dirHandle = req.result.handle;
-              resolve(true);
-            } else {
-              // Try to request permission
-              const newPermission = await req.result.handle.requestPermission({ mode: 'readwrite' });
-              if (newPermission === 'granted') {
-                this.dirHandle = req.result.handle;
-                resolve(true);
-              } else {
-                resolve(false);
-              }
-            }
-          } else {
-            resolve(false);
-          }
-        };
-        req.onerror = () => resolve(false);
-      } catch (e) {
-        console.warn('FileMemoryStorage: Error restoring handle:', e);
-        resolve(false);
-      }
-    });
-  }
-
-  async selectDirectory(isAutoSetup = false) {
-    try {
-      // For auto-setup, try to guide user to create/select clawgpt-memory folder
-      const options = {
-        id: 'clawgpt-memory',
-        mode: 'readwrite'
-      };
-
-      // Start in the directory where ClawGPT is running if possible
-      // This helps users find/create the clawgpt-memory folder in the right place
-      if (isAutoSetup) {
-        // Try to start in downloads or documents as fallback
-        options.startIn = 'downloads';
-      }
-
-      this.dirHandle = await window.showDirectoryPicker(options);
-
-      // Save handle for persistence
-      if (this.db) {
-        const tx = this.db.transaction(['handles'], 'readwrite');
-        tx.objectStore('handles').put({ id: 'memoryDir', handle: this.dirHandle });
-      }
-
-      this.enabled = true;
-      console.log('FileMemoryStorage: Directory selected:', this.dirHandle.name);
-      return true;
-    } catch (e) {
-      if (e.name !== 'AbortError') {
-        console.error('FileMemoryStorage: Error selecting directory:', e);
-      }
-      return false;
-    }
-  }
-
-  async writeMessage(message) {
-    if (!this.enabled || !this.dirHandle) return;
-
-    this.pendingWrites.push(message);
-
-    // Debounce writes to batch them
-    if (this.writeDebounce) clearTimeout(this.writeDebounce);
-    this.writeDebounce = setTimeout(() => this.flushWrites(), 1000);
-  }
-
-  async flushWrites() {
-    if (!this.enabled || !this.dirHandle || this.pendingWrites.length === 0) return;
-
-    const toWrite = [...this.pendingWrites];
-    this.pendingWrites = [];
-
-    try {
-      // Group messages by date
-      const byDate = {};
-      for (const msg of toWrite) {
-        const date = new Date(msg.timestamp).toISOString().split('T')[0];
-        if (!byDate[date]) byDate[date] = [];
-        byDate[date].push(msg);
-      }
-
-      // Write to date-based files
-      for (const [date, messages] of Object.entries(byDate)) {
-        await this.appendToDateFile(date, messages);
-      }
-    } catch (e) {
-      console.error('FileMemoryStorage: Error writing messages:', e);
-      // Put messages back in queue
-      this.pendingWrites = [...toWrite, ...this.pendingWrites];
-    }
-  }
-
-  async appendToDateFile(date, messages) {
-    const filename = `${date}.jsonl`;
-
-    try {
-      // Get or create file
-      const fileHandle = await this.dirHandle.getFileHandle(filename, { create: true });
-
-      // Read existing content
-      const file = await fileHandle.getFile();
-      const existingContent = await file.text();
-
-      // Load existing message IDs to avoid duplicates
-      const existingIds = new Set();
-      if (existingContent) {
-        for (const line of existingContent.split('\n')) {
-          if (line.trim()) {
-            try {
-              const msg = JSON.parse(line);
-              if (msg.id) existingIds.add(msg.id);
-            } catch {}
-          }
-        }
-      }
-
-      // Filter out duplicates and append new messages
-      const newMessages = messages.filter(m => !existingIds.has(m.id));
-      if (newMessages.length === 0) return;
-
-      const newLines = newMessages.map(m => JSON.stringify(m)).join('\n') + '\n';
-
-      // Write back
-      const writable = await fileHandle.createWritable({ keepExistingData: true });
-      await writable.seek((await file.size));
-      await writable.write(newLines);
-      await writable.close();
-
-      console.log(`FileMemoryStorage: Wrote ${newMessages.length} messages to ${filename}`);
-    } catch (e) {
-      console.error(`FileMemoryStorage: Error writing to ${filename}:`, e);
-      throw e;
-    }
-  }
-
-  async writeChat(chat) {
-    if (!this.enabled || !this.dirHandle || !chat.messages) return;
-
-    // Write each message with chat context
-    for (let i = 0; i < chat.messages.length; i++) {
-      const msg = chat.messages[i];
-      await this.writeMessage({
-        id: `${chat.id}-${i}`,
-        chatId: chat.id,
-        chatTitle: chat.title || 'Untitled',
-        order: i,
-        role: msg.role,
-        content: msg.content || '',
-        timestamp: msg.timestamp || chat.createdAt || Date.now()
-      });
-    }
-  }
-
-  async syncAllChats(chats) {
-    if (!this.enabled || !this.dirHandle) return 0;
-
-    let count = 0;
-    for (const chat of Object.values(chats)) {
-      if (chat.messages) {
-        await this.writeChat(chat);
-        count += chat.messages.length;
-      }
-    }
-
-    // Force flush
-    await this.flushWrites();
-    return count;
-  }
-
-  isEnabled() {
-    return this.enabled;
-  }
-
-  getDirectoryName() {
-    return this.dirHandle?.name || null;
-  }
-}
-
-// Mobile Memory Storage - Uses Capacitor Filesystem for automatic storage (no user prompt)
-// This is used on mobile instead of FileMemoryStorage
-class MobileMemoryStorage {
-  constructor() {
-    this.enabled = false;
-    this.Filesystem = null;
-    this.Directory = null;
-    this.folderName = 'clawgpt-memory';
-    this.pendingWrites = [];
-    this.writeDebounce = null;
-  }
-
-  async init() {
-    try {
-      console.log('MobileMemoryStorage: Starting init...');
-
-      // Check if Capacitor is available
-      if (typeof Capacitor === 'undefined') {
-        console.log('MobileMemoryStorage: Capacitor not available');
-        return false;
-      }
-
-      console.log('MobileMemoryStorage: Capacitor found, checking plugins...');
-      console.log('MobileMemoryStorage: Capacitor.Plugins =', JSON.stringify(Object.keys(Capacitor.Plugins || {})));
-
-      // Try to get Filesystem plugin
-      let Filesystem = null;
-
-      if (Capacitor.Plugins?.Filesystem) {
-        console.log('MobileMemoryStorage: Found Capacitor.Plugins.Filesystem');
-        Filesystem = Capacitor.Plugins.Filesystem;
-      } else {
-        console.log('MobileMemoryStorage: Filesystem plugin not in Capacitor.Plugins');
-        return false;
-      }
-
-      this.Filesystem = Filesystem;
-      console.log('MobileMemoryStorage: Attempting to create folder...');
-
-      // Create clawgpt-memory folder if it doesn't exist
-      await this.ensureFolder();
-
-      this.enabled = true;
-      console.log('MobileMemoryStorage: Ready!');
-      return true;
-    } catch (e) {
-      console.error('MobileMemoryStorage: Init failed with error:', e);
-      console.error('MobileMemoryStorage: Error stack:', e.stack);
-      // Don't crash - just disable the feature
-      return false;
-    }
-  }
-
-  async ensureFolder() {
-    try {
-      await this.Filesystem.mkdir({
-        path: this.folderName,
-        directory: 'DOCUMENTS',
-        recursive: true
-      });
-    } catch (e) {
-      // Folder might already exist, that's fine
-      if (!e.message?.includes('exist')) {
-        console.warn('MobileMemoryStorage: mkdir warning:', e);
-      }
-    }
-  }
-
-  async writeMessage(message) {
-    if (!this.enabled) return;
-
-    this.pendingWrites.push(message);
-
-    // Debounce writes
-    if (this.writeDebounce) clearTimeout(this.writeDebounce);
-    this.writeDebounce = setTimeout(() => this.flushWrites(), 1000);
-  }
-
-  async flushWrites() {
-    if (!this.enabled || this.pendingWrites.length === 0) return;
-
-    const toWrite = [...this.pendingWrites];
-    this.pendingWrites = [];
-
-    try {
-      // Group messages by date
-      const byDate = {};
-      for (const msg of toWrite) {
-        const date = new Date(msg.timestamp).toISOString().split('T')[0];
-        if (!byDate[date]) byDate[date] = [];
-        byDate[date].push(msg);
-      }
-
-      // Write to date-based files
-      for (const [date, messages] of Object.entries(byDate)) {
-        await this.appendToDateFile(date, messages);
-      }
-    } catch (e) {
-      console.error('MobileMemoryStorage: Error writing messages:', e);
-      // Put messages back in queue
-      this.pendingWrites = [...toWrite, ...this.pendingWrites];
-    }
-  }
-
-  async appendToDateFile(date, messages) {
-    const filename = `${this.folderName}/${date}.jsonl`;
-
-    try {
-      // Try to read existing content
-      let existingContent = '';
-      let existingIds = new Set();
-
-      try {
-        const result = await this.Filesystem.readFile({
-          path: filename,
-          directory: 'DOCUMENTS',
-          encoding: 'utf8'
-        });
-        existingContent = result.data || '';
-
-        // Parse existing IDs to avoid duplicates
-        for (const line of existingContent.split('\n')) {
-          if (line.trim()) {
-            try {
-              const msg = JSON.parse(line);
-              if (msg.id) existingIds.add(msg.id);
-            } catch {}
-          }
-        }
-      } catch (e) {
-        // File doesn't exist yet, that's fine
-      }
-
-      // Filter out duplicates and create new lines
-      const newMessages = messages.filter(m => !existingIds.has(m.id));
-      if (newMessages.length === 0) return;
-
-      const newLines = newMessages.map(m => JSON.stringify(m)).join('\n') + '\n';
-      const fullContent = existingContent + newLines;
-
-      // Write back
-      await this.Filesystem.writeFile({
-        path: filename,
-        directory: 'DOCUMENTS',
-        data: fullContent,
-        encoding: 'utf8'
-      });
-
-      console.log(`MobileMemoryStorage: Wrote ${newMessages.length} messages to ${date}.jsonl`);
-    } catch (e) {
-      console.error(`MobileMemoryStorage: Error writing to ${filename}:`, e);
-      throw e;
-    }
-  }
-
-  async writeChat(chat) {
-    if (!this.enabled || !chat.messages) return;
-
-    for (let i = 0; i < chat.messages.length; i++) {
-      const msg = chat.messages[i];
-      await this.writeMessage({
-        id: `${chat.id}-${i}`,
-        chatId: chat.id,
-        chatTitle: chat.title || 'Untitled',
-        order: i,
-        role: msg.role,
-        content: msg.content || '',
-        timestamp: msg.timestamp || chat.createdAt || Date.now()
-      });
-    }
-  }
-
-  async syncAllChats(chats) {
-    if (!this.enabled) return 0;
-
-    let count = 0;
-    for (const chat of Object.values(chats)) {
-      if (chat.messages) {
-        await this.writeChat(chat);
-        count += chat.messages.length;
-      }
-    }
-
-    // Force flush
-    await this.flushWrites();
-    return count;
-  }
-
-  isEnabled() {
-    return this.enabled;
-  }
-
-  getDirectoryName() {
-    return this.enabled ? this.folderName : null;
-  }
-}
-
-// ClawGPT Memory - Per-message storage for better search
-class MemoryStorage {
-  constructor() {
-    this.dbName = 'clawgpt-memory';
-    this.dbVersion = 1;
-    this.db = null;
-  }
-
-  async init() {
-    if (this.db) return this.db;
-
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, this.dbVersion);
-
-      request.onerror = () => {
-        console.warn('MemoryStorage: IndexedDB not available');
-        resolve(null);
-      };
-
-      request.onsuccess = (event) => {
-        this.db = event.target.result;
-        resolve(this.db);
-      };
-
-      request.onupgradeneeded = (event) => {
-        const db = event.target.result;
-
-        // Messages store with indexes for search
-        if (!db.objectStoreNames.contains('messages')) {
-          const store = db.createObjectStore('messages', { keyPath: 'id' });
-          store.createIndex('chatId', 'chatId', { unique: false });
-          store.createIndex('timestamp', 'timestamp', { unique: false });
-          store.createIndex('role', 'role', { unique: false });
-          // Compound index for chat + order
-          store.createIndex('chatOrder', ['chatId', 'order'], { unique: true });
-        }
-
-        // Search index for full-text search
-        if (!db.objectStoreNames.contains('searchIndex')) {
-          const searchStore = db.createObjectStore('searchIndex', { keyPath: 'term' });
-          searchStore.createIndex('messageIds', 'messageIds', { unique: false, multiEntry: true });
-        }
-
-        // Sync state
-        if (!db.objectStoreNames.contains('syncState')) {
-          db.createObjectStore('syncState', { keyPath: 'key' });
-        }
-      };
-    });
-  }
-
-  // Store a message and update search index
-  async storeMessage(chatId, chatTitle, message, order) {
-    await this.init();
-    if (!this.db) return;
-
-    const msgId = `${chatId}-${order}`;
-    const doc = {
-      id: msgId,
-      chatId,
-      chatTitle: chatTitle || 'Untitled',
-      order,
-      role: message.role,
-      content: message.content || '',
-      timestamp: message.timestamp || Date.now(),
-      tokens: message.tokens || 0
-    };
-
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(['messages', 'searchIndex'], 'readwrite');
-      const msgStore = tx.objectStore('messages');
-      const searchStore = tx.objectStore('searchIndex');
-
-      // Store the message
-      msgStore.put(doc);
-
-      // Update search index (simple term-based)
-      const terms = this.extractTerms(doc.content);
-      terms.forEach(term => {
-        const getReq = searchStore.get(term);
-        getReq.onsuccess = () => {
-          const existing = getReq.result || { term, messageIds: [] };
-          if (!existing.messageIds.includes(msgId)) {
-            existing.messageIds.push(msgId);
-            searchStore.put(existing);
-          }
-        };
-      });
-
-      tx.oncomplete = () => resolve(doc);
-      tx.onerror = () => reject(tx.error);
-    });
-  }
-
-  // Extract searchable terms from content
-  extractTerms(content) {
-    if (!content) return [];
-    return content
-      .toLowerCase()
-      .replace(/[^\w\s]/g, ' ')
-      .split(/\s+/)
-      .filter(term => term.length >= 3)
-      .filter(term => !ClawGPT.STOP_WORDS.has(term));
-  }
-
-  // Search messages by terms
-  async search(query, limit = 50) {
-    await this.init();
-    if (!this.db) return [];
-
-    const terms = this.extractTerms(query);
-    if (terms.length === 0) return [];
-
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(['messages', 'searchIndex'], 'readonly');
-      const msgStore = tx.objectStore('messages');
-      const searchStore = tx.objectStore('searchIndex');
-
-      // Find message IDs matching any term
-      const matchingIds = new Map(); // msgId -> match count
-      let termsProcessed = 0;
-
-      terms.forEach(term => {
-        const req = searchStore.get(term);
-        req.onsuccess = () => {
-          if (req.result && req.result.messageIds) {
-            req.result.messageIds.forEach(id => {
-              matchingIds.set(id, (matchingIds.get(id) || 0) + 1);
-            });
-          }
-          termsProcessed++;
-
-          if (termsProcessed === terms.length) {
-            // Sort by match count, get top results
-            const sortedIds = [...matchingIds.entries()]
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, limit)
-              .map(([id]) => id);
-
-            // Fetch the actual messages
-            const results = [];
-            let fetched = 0;
-
-            if (sortedIds.length === 0) {
-              resolve([]);
-              return;
-            }
-
-            sortedIds.forEach(id => {
-              const msgReq = msgStore.get(id);
-              msgReq.onsuccess = () => {
-                if (msgReq.result) {
-                  results.push({
-                    ...msgReq.result,
-                    matchScore: matchingIds.get(id)
-                  });
-                }
-                fetched++;
-                if (fetched === sortedIds.length) {
-                  // Sort by match score then timestamp
-                  results.sort((a, b) => {
-                    if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
-                    return b.timestamp - a.timestamp;
-                  });
-                  resolve(results);
-                }
-              };
-            });
-          }
-        };
-      });
-    });
-  }
-
-  // Get all messages for a chat
-  async getChatMessages(chatId) {
-    await this.init();
-    if (!this.db) return [];
-
-    return new Promise((resolve, reject) => {
-      const tx = this.db.transaction(['messages'], 'readonly');
-      const store = tx.objectStore('messages');
-      const index = store.index('chatId');
-      const req = index.getAll(chatId);
-
-      req.onsuccess = () => {
-        const messages = req.result || [];
-        messages.sort((a, b) => a.order - b.order);
-        resolve(messages);
-      };
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  // Get message count
-  async getMessageCount() {
-    await this.init();
-    if (!this.db) return 0;
-
-    return new Promise((resolve) => {
-      const tx = this.db.transaction(['messages'], 'readonly');
-      const store = tx.objectStore('messages');
-      const req = store.count();
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => resolve(0);
-    });
-  }
-
-  // Sync all chats to memory storage
-  async syncFromChats(chats) {
-    if (!chats || typeof chats !== 'object') return 0;
-
-    let synced = 0;
-    for (const [chatId, chat] of Object.entries(chats)) {
-      if (!chat.messages) continue;
-
-      for (let i = 0; i < chat.messages.length; i++) {
-        await this.storeMessage(chatId, chat.title, chat.messages[i], i);
-        synced++;
-      }
-    }
-
-    // Save sync timestamp
-    await this.init();
-    if (this.db) {
-      const tx = this.db.transaction(['syncState'], 'readwrite');
-      tx.objectStore('syncState').put({ key: 'lastSync', timestamp: Date.now() });
-    }
-
-    return synced;
-  }
-
-  // Get last sync timestamp
-  async getLastSync() {
-    await this.init();
-    if (!this.db) return null;
-
-    return new Promise((resolve) => {
-      const tx = this.db.transaction(['syncState'], 'readonly');
-      const req = tx.objectStore('syncState').get('lastSync');
-      req.onsuccess = () => resolve(req.result?.timestamp || null);
-      req.onerror = () => resolve(null);
-    });
-  }
-}
-
 class ClawGPT {
   // Stop words for search filtering (class constant for performance)
   static STOP_WORDS = new Set([
@@ -1006,16 +31,12 @@ class ClawGPT {
     this.pinnedExpanded = false;
     this.storage = new ChatStorage();
     this.memoryStorage = new MemoryStorage();
-    // Use MobileMemoryStorage on Capacitor (auto-creates folder), FileMemoryStorage on desktop
-    // TEMPORARILY DISABLED: MobileMemoryStorage causes crash on some devices
-    // TODO: Re-enable once Capacitor Filesystem plugin issue is resolved
     try {
       this.isMobile = typeof Capacitor !== 'undefined' && typeof Capacitor.isNativePlatform === 'function' && Capacitor.isNativePlatform();
     } catch (e) {
       console.warn('Error checking Capacitor platform:', e);
       this.isMobile = false;
     }
-    // Always use FileMemoryStorage for now - MobileMemoryStorage disabled due to crash
     this.fileMemoryStorage = new FileMemoryStorage();
 
     this.loadSettings();
@@ -4721,7 +3742,7 @@ Example: [0, 2, 5]`;
       return;
     }
 
-    this.elements.searchResults.innerHTML = results.slice(0, 50).map(result => {
+    this.elements.searchResults.innerHTML = this.sanitize(results.slice(0, 50).map(result => {
       const timeAgo = this.getTimeAgo(result.timestamp);
       const isMetaMatch = result.matchType && result.matchType !== 'exact';
 
@@ -4758,7 +3779,7 @@ Example: [0, 2, 5]`;
           <div class="search-result-snippet">${snippet}</div>
         </div>
       `;
-    }).join('');
+    }).join(''));
 
     // Add click handlers
     this.elements.searchResults.querySelectorAll('.search-result').forEach(el => {
@@ -5425,7 +4446,7 @@ Example: [0, 2, 5]`;
       });
     }
 
-    this.elements.chatList.innerHTML = html;
+    this.elements.chatList.innerHTML = this.sanitize(html);
 
     // Add click handlers
     this.elements.chatList.querySelectorAll('.chat-item').forEach(item => {
@@ -6125,7 +5146,7 @@ Example: [0, 2, 5]`;
       return `<div class="code-block"><button class="code-copy-btn" title="Copy code">${copyIcon}</button><pre ${langAttr}><code class="${langClass}">${escapedCode}</code></pre></div>`;
     });
 
-    return html;
+    return this.sanitize(html);
   }
 
   highlightCode() {
@@ -6159,6 +5180,17 @@ Example: [0, 2, 5]`;
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  sanitize(html) {
+    if (typeof DOMPurify !== 'undefined') {
+      return DOMPurify.sanitize(html, {
+        ADD_TAGS: ['svg', 'rect', 'path', 'polygon', 'circle', 'line'],
+        ADD_ATTR: ['viewBox', 'fill', 'stroke', 'stroke-width', 'd', 'x', 'y',
+                   'width', 'height', 'rx', 'points', 'cx', 'cy', 'r', 'data-language']
+      });
+    }
+    return html;
   }
 
   // Voice input
@@ -7278,8 +6310,8 @@ Example: [0, 2, 5]`;
   async handleImageFile(file) {
     const imagePreview = document.getElementById('imagePreview');
 
-    // Convert to base64
-    const base64 = await this.fileToBase64(file);
+    // Resize large images to save bandwidth (max 1920px, JPEG quality 0.85)
+    const base64 = await this.resizeImage(file, 1920, 0.85);
     const imageData = {
       id: Date.now() + Math.random(),
       base64,
@@ -7577,6 +6609,35 @@ Example: [0, 2, 5]`;
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  resizeImage(file, maxDim, quality) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width <= maxDim && height <= maxDim) {
+          // No resize needed, return original
+          resolve(img.src);
+          return;
+        }
+        const scale = maxDim / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        const outputType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+        resolve(canvas.toDataURL(outputType, quality));
+      };
+      img.onerror = reject;
+      const reader = new FileReader();
+      reader.onload = () => { img.src = reader.result; };
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
