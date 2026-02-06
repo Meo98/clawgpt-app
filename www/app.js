@@ -2671,7 +2671,9 @@ window.CLAWGPT_CONFIG = {
     // Event listeners
     this.elements.sendBtn.addEventListener('click', () => this.sendMessage());
     this.elements.messageInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // On mobile: Enter = new line, send via button only
+      // On desktop: Enter = send, Shift+Enter = new line
+      if (e.key === 'Enter' && !e.shiftKey && !this.isMobile) {
         e.preventDefault();
         this.sendMessage();
       }
