@@ -3446,16 +3446,18 @@ window.CLAWGPT_CONFIG = {
 
   sendRelayMessage(msg) {
     if (!this.relayWs || this.relayWs.readyState !== WebSocket.OPEN) {
-      console.error('Relay not connected');
+      console.error('Relay not connected, state:', this.relayWs?.readyState);
       return;
     }
 
     if (this.relayEncrypted && this.relayCrypto) {
       // Send encrypted
       const envelope = this.relayCrypto.createEnvelope(msg);
+      console.log('[Relay] Sending encrypted message type:', msg.type);
       this.relayWs.send(JSON.stringify(envelope));
     } else {
       // Send unencrypted (only during key exchange)
+      console.log('[Relay] Sending unencrypted message type:', msg.type);
       this.relayWs.send(JSON.stringify(msg));
     }
   }
@@ -6804,11 +6806,13 @@ Example: [0, 2, 5]`;
       }
 
       // Send to desktop
+      console.log('[Relay] Voice chat sending message to desktop, relayWs state:', this.relayWs?.readyState, 'encrypted:', this.relayEncrypted);
       this.sendRelayMessage({
         type: 'user-message',
         chatId: this.currentChatId,
         content: message
       });
+      console.log('[Relay] Voice chat message sent');
 
     } else {
       this.showToast('Not connected', true);
