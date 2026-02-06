@@ -391,6 +391,19 @@ class ClawGPT {
       if (count > 0) {
         console.log(`File memory: synced ${count} messages to disk`);
       }
+    } else if (this.fileMemoryStorage._pendingHandle) {
+      // Had a saved handle but no permission — reconnect on first user interaction
+      const reconnectOnce = async () => {
+        document.removeEventListener('click', reconnectOnce);
+        const ok = await this.fileMemoryStorage.reconnect();
+        if (ok) {
+          console.log('File memory storage reconnected:', this.fileMemoryStorage.getDirectoryName());
+          this.updateFileMemoryUI();
+          const count = await this.fileMemoryStorage.syncAllChats(this.chats);
+          if (count > 0) console.log(`File memory: synced ${count} messages to disk`);
+        }
+      };
+      document.addEventListener('click', reconnectOnce, { once: true });
     } else if (!this.isMobile) {
       // Desktop only: prompt for folder selection on first run
       // (Mobile auto-creates the folder, no prompt needed)

@@ -76,14 +76,10 @@ class FileMemoryStorage {
               this.dirHandle = req.result.handle;
               resolve(true);
             } else {
-              // Try to request permission
-              const newPermission = await req.result.handle.requestPermission({ mode: 'readwrite' });
-              if (newPermission === 'granted') {
-                this.dirHandle = req.result.handle;
-                resolve(true);
-              } else {
-                resolve(false);
-              }
+              // Permission not granted yet — can't request without user gesture.
+              // Store the handle so we can request permission on next user interaction.
+              this._pendingHandle = req.result.handle;
+              resolve(false);
             }
           } else {
             resolve(false);
@@ -95,6 +91,26 @@ class FileMemoryStorage {
         resolve(false);
       }
     });
+  }
+
+  // Re-request permission for a previously saved handle (must be called from user gesture)
+  async reconnect() {
+    if (this.enabled) return true;
+    if (!this._pendingHandle) return false;
+
+    try {
+      const permission = await this._pendingHandle.requestPermission({ mode: 'readwrite' });
+      if (permission === 'granted') {
+        this.dirHandle = this._pendingHandle;
+        this._pendingHandle = null;
+        this.enabled = true;
+        console.log('FileMemoryStorage: Reconnected via user gesture');
+        return true;
+      }
+    } catch (e) {
+      console.warn('FileMemoryStorage: Reconnect failed:', e);
+    }
+    return false;
   }
 
   async selectDirectory(isAutoSetup = false) {
